@@ -1863,8 +1863,12 @@ label:has(> select#reasoning-effort) select {
   list-style-type: disc;
 }
 
+/* --list-gutter defaults to the same 1.25rem as .chat-markdown ul, but
+   ChatMarkdown's `ol` renderer widens it (via inline style) for lists whose
+   last marker is 3+ digits, so item 100+ isn't clipped by list-style-position:
+   outside painting the marker past the padding box. */
 .chat-markdown ol {
-  padding-left: 1.25rem;
+  padding-left: var(--list-gutter, 1.25rem);
   list-style-type: decimal;
 }
 
@@ -1894,7 +1898,7 @@ label:has(> select#reasoning-effort) select {
 }
 
 .chat-markdown li.task-list-item input[type="checkbox"] {
-  margin: 0 0.35em 0.15em -1.25rem;
+  margin: 0 0.35em 0.15em calc(-1 * var(--list-gutter, 1.25rem));
   vertical-align: middle;
 }
 
