@@ -21,6 +21,7 @@ export type ThreadActionMenuId =
   | "copy-path"
   | "copy-branch"
   | "copy-thread-id"
+  | "archive"
   | "delete";
 
 export interface ThreadActionMenuState {
@@ -102,6 +103,12 @@ export function buildThreadActionMenuItems(
     { id: "copy-path", label: "Copy path", icon: "copy" },
     ...(state.branch ? [{ id: "copy-branch" as const, label: "Copy branch", icon: "copy" }] : []),
     { id: "copy-thread-id", label: "Copy thread ID", icon: "copy" },
+    // Archive removes the thread from the sidebar while keeping its
+    // conversation under Settings > Archived threads — distinct from Settle
+    // (stays visible in the Settled shelf) and Delete (clears history for
+    // good), so it sits beside Delete without borrowing its destructive
+    // styling.
+    { id: "archive", label: "Archive thread" },
     { id: "delete", label: "Delete", destructive: true, icon: "trash" },
   ];
 }

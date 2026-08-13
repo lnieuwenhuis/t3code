@@ -26,7 +26,7 @@ describe("buildThreadActionMenuItems", () => {
         ...baseState,
         supports: { settlement: false, snooze: false, pinning: false, titleRegeneration: false },
       }),
-    ).toEqual(["rename", "mark-unread", "copy-path", "copy-thread-id", "delete"]);
+    ).toEqual(["rename", "mark-unread", "copy-path", "copy-thread-id", "archive", "delete"]);
   });
 
   it("includes branch items only for threads with a branch", () => {
@@ -62,5 +62,22 @@ describe("buildThreadActionMenuItems", () => {
   it("marks delete as destructive and keeps it last", () => {
     const items = buildThreadActionMenuItems({ ...baseState, branch: "main" });
     expect(items.at(-1)).toMatchObject({ id: "delete", destructive: true });
+  });
+
+  it("offers archive as a non-destructive action right before delete", () => {
+    const items = buildThreadActionMenuItems(baseState);
+    const archiveItem = items.at(-2);
+    expect(archiveItem?.id).toBe("archive");
+    expect(archiveItem?.destructive).toBeFalsy();
+    expect(items.at(-1)?.id).toBe("delete");
+  });
+
+  it("keeps archive available even when the environment lacks every other capability", () => {
+    expect(
+      ids({
+        ...baseState,
+        supports: { settlement: false, snooze: false, pinning: false, titleRegeneration: false },
+      }),
+    ).toContain("archive");
   });
 });
