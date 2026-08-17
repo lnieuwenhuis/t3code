@@ -3310,7 +3310,11 @@ export default function Sidebar() {
     keybindings,
     {
       platform: navigator.platform,
-      context: { terminalFocus: isTerminalFocused() },
+      context: {
+        terminalFocus: isTerminalFocused(),
+        terminalOpen: routeTerminalOpen,
+        modelPickerOpen: isModelPickerOpen(),
+      },
     },
   );
   useEffect(() => {
