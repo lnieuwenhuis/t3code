@@ -3308,7 +3308,10 @@ export default function Sidebar() {
   const shouldShowJumpHintsNow = shouldShowThreadJumpHintsForModifiers(
     shortcutModifiers,
     keybindings,
-    { platform: navigator.platform },
+    {
+      platform: navigator.platform,
+      context: { terminalFocus: isTerminalFocused() },
+    },
   );
   useEffect(() => {
     setShowJumpHints(shouldShowJumpHintsNow);
