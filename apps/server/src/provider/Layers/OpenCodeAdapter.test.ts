@@ -280,6 +280,92 @@ beforeEach(() => {
 const advanceTestClock = (ms: number) =>
   TestClock.adjust(`${ms} millis`).pipe(Effect.andThen(Effect.yieldNow));
 
+const OPEN_CODE_SESSION_ID = "http://127.0.0.1:9999/session";
+
+function taskEnvelope(taskId: string, state: "running" | "completed" | "error", text: string) {
+  const tag = state === "error" ? "task_error" : "task_result";
+  return [`<task id="${taskId}" state="${state}">`, `<${tag}>`, text, `</${tag}>`, "</task>"].join(
+    "\n",
+  );
+}
+
+function taskPart(input: {
+  readonly id: string;
+  readonly taskId: string;
+  readonly description: string;
+  readonly role: string;
+  readonly status: "running" | "completed" | "error";
+  readonly result?: string;
+  readonly model?: { readonly providerID: string; readonly modelID: string };
+  readonly resumed?: boolean;
+  readonly background?: boolean;
+  readonly omitMetadata?: boolean;
+}) {
+  const taskInput = {
+    description: input.description,
+    prompt: `${input.description}.`,
+    subagent_type: input.role,
+    ...(input.resumed ? { task_id: input.taskId } : {}),
+  };
+  const metadata = {
+    sessionId: input.taskId,
+    ...(input.model ? { model: input.model } : {}),
+    ...(input.background ? { background: true, jobId: input.taskId } : {}),
+  };
+  const base = {
+    id: input.id,
+    sessionID: OPEN_CODE_SESSION_ID,
+    messageID: `msg-${input.id}`,
+    type: "tool",
+    callID: `call-${input.id}`,
+    tool: "task",
+  };
+  if (input.status === "error") {
+    return {
+      ...base,
+      state: {
+        status: "error",
+        input: taskInput,
+        error: input.result ?? "Task failed",
+        ...(!input.omitMetadata ? { metadata } : {}),
+        time: { start: 1, end: 2 },
+      },
+    };
+  }
+  if (input.status === "completed") {
+    return {
+      ...base,
+      state: {
+        status: "completed",
+        input: taskInput,
+        title: input.description,
+        metadata,
+        output: taskEnvelope(
+          input.taskId,
+          input.background ? "running" : "completed",
+          input.result ?? "Task completed",
+        ),
+        time: { start: 1, end: 2 },
+      },
+    };
+  }
+  return {
+    ...base,
+    state: {
+      status: "running",
+      input: taskInput,
+      title: input.description,
+      metadata,
+      time: { start: 1 },
+    },
+  };
+}
+
+const partUpdated = (part: unknown) => ({
+  type: "message.part.updated",
+  properties: { sessionID: OPEN_CODE_SESSION_ID, part },
+});
+
 it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
   it.effect("reuses a configured OpenCode server URL instead of spawning a local server", () =>
     Effect.gen(function* () {
@@ -1191,167 +1277,76 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
-  it.effect("projects native Task parts into the task lifecycle without hiding tool rows", () =>
+  it.effect("projects foreground, resumed, failed, and background Task lifecycles", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
       const threadId = asThreadId("thread-opencode-task-lifecycle");
-      const runningPart = {
-        id: "part-task-1",
-        sessionID: "http://127.0.0.1:9999/session",
-        messageID: "msg-task-1",
-        type: "tool",
-        callID: "call-task-1",
-        tool: "task",
-        state: {
-          status: "running",
-          input: {
-            description: "Inspect provider events",
-            prompt: "Inspect the OpenCode provider event mapping.",
-            subagent_type: "explore",
-          },
-          title: "Inspect provider events",
-          metadata: {
-            parentSessionId: "http://127.0.0.1:9999/session",
-            sessionId: "ses_child_1",
-            model: { providerID: "openai", modelID: "gpt-5" },
-          },
-          time: { start: 1 },
-        },
-      };
+      const foreground = taskPart({
+        id: "foreground",
+        taskId: "task-foreground",
+        description: "Inspect provider events",
+        role: "explore",
+        status: "running",
+        model: { providerID: "openai", modelID: "gpt-5" },
+      });
+      const resumed = taskPart({
+        id: "resumed",
+        taskId: "task-foreground",
+        description: "Inspect failing path",
+        role: "general",
+        status: "running",
+        resumed: true,
+        model: { providerID: "anthropic", modelID: "claude-sonnet" },
+      });
+      const failed = taskPart({
+        id: "resumed",
+        taskId: "task-foreground",
+        description: "Inspect failing path",
+        role: "general",
+        status: "error",
+        result: "Child session failed",
+        resumed: true,
+        omitMetadata: true,
+      });
       runtimeMock.state.subscribedEvents = [
-        {
-          type: "message.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            info: { id: "msg-task-1", role: "assistant" },
-          },
-        },
+        partUpdated(foreground),
+        partUpdated(
+          taskPart({
+            id: "foreground",
+            taskId: "task-foreground",
+            description: "Inspect provider events",
+            role: "explore",
+            status: "completed",
+            result: "The provider emits generic item events.",
+            model: { providerID: "openai", modelID: "gpt-5" },
+          }),
+        ),
+        ...[resumed, resumed, failed, failed].map(partUpdated),
+        partUpdated(
+          taskPart({
+            id: "background",
+            taskId: "task-background",
+            description: "Inspect background path",
+            role: "explore",
+            status: "completed",
+            result: "Still working",
+            background: true,
+          }),
+        ),
         {
           type: "message.part.updated",
           properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            part: runningPart,
-          },
-        },
-        {
-          type: "message.part.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
+            sessionID: OPEN_CODE_SESSION_ID,
             part: {
-              ...runningPart,
-              state: {
-                ...runningPart.state,
-                status: "completed",
-                output: "The provider emits generic item events.",
-                time: { start: 1, end: 2 },
-              },
+              id: "background-notice",
+              sessionID: OPEN_CODE_SESSION_ID,
+              messageID: "msg-background-notice",
+              type: "text",
+              synthetic: true,
+              text: taskEnvelope("task-background", "completed", "Background inspection finished."),
             },
           },
         },
-      ];
-      const eventsFiber = yield* adapter.streamEvents.pipe(
-        Stream.filter(
-          (event) =>
-            event.threadId === threadId &&
-            (event.type === "item.updated" ||
-              event.type === "item.completed" ||
-              event.type === "task.started" ||
-              event.type === "task.updated" ||
-              event.type === "task.completed"),
-        ),
-        Stream.take(4),
-        Stream.runCollect,
-        Effect.forkChild,
-      );
-
-      yield* adapter.startSession({
-        provider: ProviderDriverKind.make("opencode"),
-        threadId,
-        runtimeMode: "full-access",
-      });
-
-      const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
-      NodeAssert.deepEqual(
-        events.map((event) => event.type),
-        ["item.updated", "task.started", "item.completed", "task.completed"],
-      );
-      const started = events.find((event) => event.type === "task.started");
-      NodeAssert.ok(started && started.type === "task.started");
-      NodeAssert.deepEqual(started.payload, {
-        taskId: "ses_child_1",
-        description: "Inspect provider events",
-        taskType: "subagent",
-        title: "Inspect provider events",
-        role: "explore",
-        model: "openai/gpt-5",
-        toolUseId: "call-task-1",
-      });
-      const completed = events.find((event) => event.type === "task.completed");
-      NodeAssert.ok(completed && completed.type === "task.completed");
-      NodeAssert.deepEqual(completed.payload, {
-        taskId: "ses_child_1",
-        status: "completed",
-        summary: "The provider emits generic item events.",
-        taskType: "subagent",
-        title: "Inspect provider events",
-        role: "explore",
-        model: "openai/gpt-5",
-        toolUseId: "call-task-1",
-      });
-    }),
-  );
-
-  it.effect("deduplicates Task transitions and retains linkage when an error drops metadata", () =>
-    Effect.gen(function* () {
-      const adapter = yield* OpenCodeAdapter;
-      const threadId = asThreadId("thread-opencode-task-error");
-      const runningPart = {
-        id: "part-task-error",
-        sessionID: "http://127.0.0.1:9999/session",
-        messageID: "msg-task-error",
-        type: "tool",
-        callID: "call-task-error",
-        tool: "task",
-        state: {
-          status: "running",
-          input: {
-            description: "Inspect failing path",
-            prompt: "Inspect the failing path.",
-            subagent_type: "general",
-            task_id: "ses_child_error",
-          },
-          title: "Inspect failing path",
-          metadata: {
-            sessionId: "ses_child_error",
-            model: { providerID: "anthropic", modelID: "claude-sonnet" },
-          },
-          time: { start: 1 },
-        },
-      };
-      const errorPart = {
-        ...runningPart,
-        state: {
-          status: "error",
-          input: runningPart.state.input,
-          error: "Child session failed",
-          time: { start: 1, end: 2 },
-        },
-      };
-      runtimeMock.state.subscribedEvents = [
-        {
-          type: "message.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            info: { id: "msg-task-error", role: "assistant" },
-          },
-        },
-        ...[runningPart, runningPart, errorPart, errorPart].map((part) => ({
-          type: "message.part.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            part,
-          },
-        })),
       ];
       const eventsFiber = yield* adapter.streamEvents.pipe(
         Stream.filter(
@@ -1361,7 +1356,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
               event.type === "task.updated" ||
               event.type === "task.completed"),
         ),
-        Stream.take(3),
+        Stream.take(6),
         Stream.runCollect,
         Effect.forkChild,
       );
@@ -1374,115 +1369,48 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
 
       const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
       NodeAssert.deepEqual(
-        events.map((event) => event.type),
-        ["task.started", "task.updated", "task.completed"],
+        events.map((event) => {
+          NodeAssert.ok(
+            event.type === "task.started" ||
+              event.type === "task.updated" ||
+              event.type === "task.completed",
+          );
+          return [
+            event.type,
+            event.payload.taskId,
+            "status" in event.payload ? event.payload.status : undefined,
+            "summary" in event.payload ? event.payload.summary : undefined,
+          ];
+        }),
+        [
+          ["task.started", "task-foreground", undefined, undefined],
+          [
+            "task.completed",
+            "task-foreground",
+            "completed",
+            "The provider emits generic item events.",
+          ],
+          ["task.updated", "task-foreground", "running", undefined],
+          ["task.completed", "task-foreground", "failed", "Child session failed"],
+          ["task.started", "task-background", undefined, undefined],
+          ["task.completed", "task-background", "completed", "Background inspection finished."],
+        ],
       );
-      const completed = events.at(-1);
-      NodeAssert.ok(completed && completed.type === "task.completed");
-      NodeAssert.deepEqual(completed.payload, {
-        taskId: "ses_child_error",
-        status: "failed",
-        summary: "Child session failed",
+      NodeAssert.deepEqual(events[0]?.payload, {
+        taskId: "task-foreground",
+        description: "Inspect provider events",
         taskType: "subagent",
-        title: "Inspect failing path",
-        role: "general",
-        model: "anthropic/claude-sonnet",
-        toolUseId: "call-task-error",
-      });
-    }),
-  );
-
-  it.effect("keeps background Tasks running until their synthetic completion notice", () =>
-    Effect.gen(function* () {
-      const adapter = yield* OpenCodeAdapter;
-      const threadId = asThreadId("thread-opencode-background-task");
-      runtimeMock.state.subscribedEvents = [
-        {
-          type: "message.part.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            part: {
-              id: "part-task-background",
-              sessionID: "http://127.0.0.1:9999/session",
-              messageID: "msg-task-background",
-              type: "tool",
-              callID: "call-task-background",
-              tool: "task",
-              state: {
-                status: "completed",
-                input: {
-                  description: "Inspect background path",
-                  prompt: "Inspect the background path.",
-                  subagent_type: "explore",
-                },
-                title: "Inspect background path",
-                metadata: {
-                  sessionId: "ses_child_background",
-                  background: true,
-                  jobId: "ses_child_background",
-                },
-                output:
-                  '<task id="ses_child_background" state="running">\n<task_result>Still working</task_result>\n</task>',
-                time: { start: 1, end: 2 },
-              },
-            },
-          },
-        },
-        {
-          type: "message.part.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            part: {
-              id: "part-task-background-notice",
-              sessionID: "http://127.0.0.1:9999/session",
-              messageID: "msg-task-background-notice",
-              type: "text",
-              synthetic: true,
-              text: [
-                '<task id="ses_child_background" state="completed">',
-                "<summary>Background task completed: Inspect background path</summary>",
-                "<task_result>",
-                "Background inspection finished.",
-                "</task_result>",
-                "</task>",
-              ].join("\n"),
-            },
-          },
-        },
-      ];
-      const eventsFiber = yield* adapter.streamEvents.pipe(
-        Stream.filter(
-          (event) =>
-            event.threadId === threadId &&
-            (event.type === "task.started" || event.type === "task.completed"),
-        ),
-        Stream.take(2),
-        Stream.runCollect,
-        Effect.forkChild,
-      );
-
-      yield* adapter.startSession({
-        provider: ProviderDriverKind.make("opencode"),
-        threadId,
-        runtimeMode: "full-access",
-      });
-
-      const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
-      NodeAssert.deepEqual(
-        events.map((event) => event.type),
-        ["task.started", "task.completed"],
-      );
-      const completed = events.at(-1);
-      NodeAssert.ok(completed && completed.type === "task.completed");
-      NodeAssert.deepEqual(completed.payload, {
-        taskId: "ses_child_background",
-        status: "completed",
-        summary: "Background inspection finished.",
-        taskType: "subagent",
-        title: "Inspect background path",
+        title: "Inspect provider events",
         role: "explore",
-        toolUseId: "call-task-background",
+        model: "openai/gpt-5",
+        toolUseId: "call-foreground",
       });
+      const failedEvent = events[3];
+      NodeAssert.ok(failedEvent?.type === "task.completed");
+      NodeAssert.equal(failedEvent.payload.model, "anthropic/claude-sonnet");
+      const backgroundEvent = events[5];
+      NodeAssert.ok(backgroundEvent?.type === "task.completed");
+      NodeAssert.equal(backgroundEvent.payload.title, "Inspect background path");
     }),
   );
 
