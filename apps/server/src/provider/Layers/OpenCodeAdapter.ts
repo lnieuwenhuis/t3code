@@ -171,7 +171,7 @@ interface OpenCodeTurnSnapshot {
 
 interface OpenCodeTaskLifecycle {
   readonly taskId: RuntimeTaskId;
-  readonly toolUseId: string;
+  readonly toolUseId: string | undefined;
   readonly description: string | undefined;
   readonly title: string | undefined;
   readonly role: string | undefined;
@@ -646,7 +646,7 @@ function taskLinkage(task: OpenCodeTaskLifecycle) {
     ...(task.title ? { title: task.title } : {}),
     ...(task.role ? { role: task.role } : {}),
     ...(task.model ? { model: task.model } : {}),
-    toolUseId: task.toolUseId,
+    ...(task.toolUseId ? { toolUseId: task.toolUseId } : {}),
   };
 }
 
@@ -939,25 +939,37 @@ export function makeOpenCodeAdapter(
       raw: unknown,
     ) {
       const task = context.taskLifecycleByTaskId.get(notification.taskId);
-      if (!task || task.status === "completed" || task.status === "failed") {
+      if (task?.status === "completed" || task?.status === "failed") {
         return;
       }
       yield* emit({
         ...(yield* buildEventBase({
           threadId: context.session.threadId,
           turnId,
-          itemId: task.toolUseId,
+          itemId: task?.toolUseId,
           raw,
         })),
         type: "task.completed",
         payload: {
-          taskId: task.taskId,
+          taskId: notification.taskId,
           status: notification.status,
           ...(notification.summary ? { summary: notification.summary } : {}),
-          ...taskLinkage(task),
+          ...(task ? taskLinkage(task) : { taskType: "subagent" as const }),
         },
       });
-      task.status = notification.status;
+      if (task) {
+        task.status = notification.status;
+      } else {
+        context.taskLifecycleByTaskId.set(notification.taskId, {
+          taskId: notification.taskId,
+          toolUseId: undefined,
+          description: undefined,
+          title: undefined,
+          role: undefined,
+          model: undefined,
+          status: notification.status,
+        });
+      }
     });
 
     const handleSubscribedEvent = Effect.fn("handleSubscribedEvent")(function* (
@@ -1137,7 +1149,11 @@ export function makeOpenCodeAdapter(
             if (task && previousTaskPart?.state.status !== part.state.status) {
               const linkage = taskLinkage(task);
               if (!previousTaskPart) {
-                if (!previousTask || task.status !== "running") {
+                const completedBeforeStart =
+                  previousTask !== undefined &&
+                  previousTask.toolUseId === undefined &&
+                  (previousTask.status === "completed" || previousTask.status === "failed");
+                if (!previousTask || completedBeforeStart || task.status !== "running") {
                   const startedBase = yield* buildEventBase({
                     threadId: context.session.threadId,
                     turnId,
@@ -1149,7 +1165,7 @@ export function makeOpenCodeAdapter(
                     raw: event,
                   });
                   yield* emit(
-                    previousTask
+                    previousTask && !completedBeforeStart
                       ? {
                           ...startedBase,
                           type: "task.updated",
@@ -1171,7 +1187,9 @@ export function makeOpenCodeAdapter(
                         },
                   );
                 }
-                task.status = "running";
+                if (!completedBeforeStart) {
+                  task.status = "running";
+                }
               }
 
               if (

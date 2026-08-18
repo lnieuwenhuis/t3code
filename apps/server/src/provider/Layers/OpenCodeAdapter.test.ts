@@ -366,6 +366,16 @@ const partUpdated = (part: unknown) => ({
   properties: { sessionID: OPEN_CODE_SESSION_ID, part },
 });
 
+const backgroundNotice = (taskId: string, result: string) =>
+  partUpdated({
+    id: `${taskId}-notice`,
+    sessionID: OPEN_CODE_SESSION_ID,
+    messageID: `msg-${taskId}-notice`,
+    type: "text",
+    synthetic: true,
+    text: taskEnvelope(taskId, "completed", result),
+  });
+
 it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
   it.effect("reuses a configured OpenCode server URL instead of spawning a local server", () =>
     Effect.gen(function* () {
@@ -1329,24 +1339,10 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
             description: "Inspect background path",
             role: "explore",
             status: "completed",
-            result: "Still working",
             background: true,
           }),
         ),
-        {
-          type: "message.part.updated",
-          properties: {
-            sessionID: OPEN_CODE_SESSION_ID,
-            part: {
-              id: "background-notice",
-              sessionID: OPEN_CODE_SESSION_ID,
-              messageID: "msg-background-notice",
-              type: "text",
-              synthetic: true,
-              text: taskEnvelope("task-background", "completed", "Background inspection finished."),
-            },
-          },
-        },
+        backgroundNotice("task-background", "Background inspection finished."),
       ];
       const eventsFiber = yield* adapter.streamEvents.pipe(
         Stream.filter(
@@ -1411,6 +1407,66 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       const backgroundEvent = events[5];
       NodeAssert.ok(backgroundEvent?.type === "task.completed");
       NodeAssert.equal(backgroundEvent.payload.title, "Inspect background path");
+    }),
+  );
+
+  it.effect("settles a background Task when its notification arrives before its tool part", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-background-task-race");
+      runtimeMock.state.subscribedEvents = [
+        backgroundNotice("task-background", "Background inspection finished."),
+        partUpdated(
+          taskPart({
+            id: "background",
+            taskId: "task-background",
+            description: "Inspect background path",
+            role: "explore",
+            status: "completed",
+            background: true,
+          }),
+        ),
+      ];
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.threadId === threadId &&
+            (event.type === "task.started" || event.type === "task.completed"),
+        ),
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+      NodeAssert.deepEqual(
+        events.map((event) => {
+          NodeAssert.ok(event.type === "task.started" || event.type === "task.completed");
+          return [
+            event.type,
+            event.payload.taskId,
+            "status" in event.payload ? event.payload.status : undefined,
+            "summary" in event.payload ? event.payload.summary : undefined,
+            "title" in event.payload ? event.payload.title : undefined,
+          ];
+        }),
+        [
+          [
+            "task.completed",
+            "task-background",
+            "completed",
+            "Background inspection finished.",
+            undefined,
+          ],
+          ["task.started", "task-background", undefined, undefined, "Inspect background path"],
+        ],
+      );
     }),
   );
 
