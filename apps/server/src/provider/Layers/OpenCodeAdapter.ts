@@ -1154,7 +1154,7 @@ export function makeOpenCodeAdapter(
                   previousTask.toolUseId === undefined &&
                   (previousTask.status === "completed" || previousTask.status === "failed");
                 if (!previousTask || completedBeforeStart || task.status !== "running") {
-                  const startedBase = yield* buildEventBase({
+                  const taskEventBaseInput = {
                     threadId: context.session.threadId,
                     turnId,
                     itemId: part.callID,
@@ -1163,7 +1163,8 @@ export function makeOpenCodeAdapter(
                         ? undefined
                         : isoFromEpochMs(part.state.time.start),
                     raw: event,
-                  });
+                  };
+                  const startedBase = yield* buildEventBase(taskEventBaseInput);
                   yield* emit(
                     previousTask && !completedBeforeStart
                       ? {
@@ -1188,7 +1189,7 @@ export function makeOpenCodeAdapter(
                   );
                   if (!previousTask && typeof part.state.input["task_id"] === "string") {
                     yield* emit({
-                      ...startedBase,
+                      ...(yield* buildEventBase(taskEventBaseInput)),
                       type: "task.updated",
                       payload: {
                         taskId: task.taskId,

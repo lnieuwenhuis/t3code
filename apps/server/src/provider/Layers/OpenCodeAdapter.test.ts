@@ -1415,6 +1415,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       const failedEvent = events[3];
       NodeAssert.ok(failedEvent?.type === "task.completed");
       NodeAssert.equal(failedEvent.payload.model, "anthropic/claude-sonnet");
+      NodeAssert.notEqual(events[4]?.eventId, events[5]?.eventId);
       const backgroundEvent = events[7];
       NodeAssert.ok(backgroundEvent?.type === "task.completed");
       NodeAssert.equal(backgroundEvent.payload.title, "Inspect background path");
