@@ -1678,9 +1678,36 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
           }),
         ),
       ];
+      runtimeMock.state.subscribedEvents = [
+        partUpdated(runtimeMock.state.messages[0]?.parts[0]),
+        partUpdated(runtimeMock.state.messages[1]?.parts[0]),
+        partUpdated({
+          id: "history-foreground-sentinel",
+          sessionID: OPEN_CODE_SESSION_ID,
+          messageID: "msg-history-foreground-sentinel",
+          type: "tool",
+          callID: "call-history-foreground-sentinel",
+          tool: "bash",
+          state: {
+            status: "completed",
+            input: {},
+            title: "Verify foreground history reconciliation",
+            output: "done",
+            metadata: {},
+            time: { start: 3, end: 4 },
+          },
+        }),
+      ];
       const eventsFiber = yield* adapter.streamEvents.pipe(
-        Stream.filter((event) => event.threadId === threadId && event.type === "task.completed"),
-        Stream.take(2),
+        Stream.filter(
+          (event) =>
+            event.threadId === threadId &&
+            (event.type === "task.completed" ||
+              event.type === "task.updated" ||
+              (event.type === "item.completed" &&
+                String(event.itemId) === "call-history-foreground-sentinel")),
+        ),
+        Stream.take(3),
         Stream.runCollect,
         Effect.forkChild,
       );
@@ -1694,14 +1721,24 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
 
       const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
       NodeAssert.deepEqual(
-        events.map((event) => {
-          NodeAssert.ok(event.type === "task.completed");
-          return [event.payload.taskId, event.payload.status, event.payload.summary];
-        }),
+        events.flatMap((event) =>
+          event.type === "task.completed"
+            ? [[event.payload.taskId, event.payload.status, event.payload.summary]]
+            : [],
+        ),
         [
           ["task-history-completed", "completed", "Stored completed result."],
           ["task-history-failed", "failed", "Stored failure."],
         ],
+      );
+      NodeAssert.equal(events.filter((event) => event.type === "task.updated").length, 0);
+      NodeAssert.equal(
+        events.filter(
+          (event) =>
+            event.type === "item.completed" &&
+            String(event.itemId) === "call-history-foreground-sentinel",
+        ).length,
+        1,
       );
     }),
   );

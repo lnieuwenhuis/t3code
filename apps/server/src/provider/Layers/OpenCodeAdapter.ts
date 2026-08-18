@@ -1258,7 +1258,15 @@ export function makeOpenCodeAdapter(
             const task = taskLifecycleFromPart(part, previousTask);
             const taskRemainsRunning =
               part.state.status === "completed" && part.state.metadata["background"] === true;
-            if (task && previousTaskPart?.state.status !== part.state.status) {
+            const replaysKnownTerminal =
+              previousTask?.toolUseId === part.callID &&
+              ((previousTask.status === "completed" && part.state.status === "completed") ||
+                (previousTask.status === "failed" && part.state.status === "error"));
+            if (
+              task &&
+              !replaysKnownTerminal &&
+              previousTaskPart?.state.status !== part.state.status
+            ) {
               const linkage = taskLinkage(task);
               if (!previousTaskPart) {
                 const completedBeforeStart =
