@@ -192,6 +192,17 @@ type OpenCodeSubscribedEvent =
     ? TEvent
     : never;
 
+interface OpenCodePreparedSubscription {
+  readonly controller: AbortController;
+  readonly stream: AsyncIterable<OpenCodeSubscribedEvent>;
+}
+
+interface OpenCodeStoredTaskTerminal {
+  readonly notification: OpenCodeTaskNotification;
+  readonly raw: Part;
+  readonly eventId: EventId;
+}
+
 function trimText(value: string | undefined | null): string | undefined {
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
@@ -310,6 +321,7 @@ const toProcessError = (threadId: ThreadId, cause: unknown): ProviderAdapterProc
   });
 
 type EventBaseInput = {
+  readonly eventId?: EventId | undefined;
   readonly threadId: ThreadId;
   readonly turnId?: TurnId | undefined;
   readonly itemId?: string | undefined;
@@ -604,9 +616,10 @@ function openCodeTaskResult(output: string): string | undefined {
 
   // Private OpenCode CLI helper; the SDK does not export it. Source:
   // https://github.com/anomalyco/opencode/blob/14b37df39168eaf6a6faf862ec4a7bbe9c825bbd/packages/opencode/src/cli/cmd/run/tool.ts
-  const match = output.match(/<task_result>\s*([\s\S]*?)\s*<\/task_result>/);
-  if (match) {
-    return trimText(match[1]);
+  const resultStart = output.indexOf("<task_result>");
+  const resultEnd = output.lastIndexOf("</task_result>");
+  if (resultStart >= 0 && resultEnd > resultStart) {
+    return trimText(output.slice(resultStart + "<task_result>".length, resultEnd));
   }
 
   return trimText(
@@ -749,7 +762,10 @@ export function makeOpenCodeAdapter(
     );
     const buildEventBase = (input: EventBaseInput) =>
       Effect.all({
-        eventId: randomUUIDv4.pipe(Effect.map(EventId.make)),
+        eventId:
+          input.eventId === undefined
+            ? randomUUIDv4.pipe(Effect.map(EventId.make))
+            : Effect.succeed(input.eventId),
         createdAt: input.createdAt === undefined ? nowIso : Effect.succeed(input.createdAt),
       }).pipe(
         Effect.map(({ eventId, createdAt }) => ({
@@ -937,6 +953,7 @@ export function makeOpenCodeAdapter(
       notification: OpenCodeTaskNotification,
       turnId: TurnId | undefined,
       raw: unknown,
+      eventId?: EventId,
     ) {
       const task = context.taskLifecycleByTaskId.get(notification.taskId);
       if (task?.status === "completed" || task?.status === "failed") {
@@ -944,6 +961,7 @@ export function makeOpenCodeAdapter(
       }
       yield* emit({
         ...(yield* buildEventBase({
+          eventId,
           threadId: context.session.threadId,
           turnId,
           itemId: task?.toolUseId,
@@ -970,6 +988,67 @@ export function makeOpenCodeAdapter(
           status: notification.status,
         });
       }
+    });
+
+    const loadStoredTaskTerminals = Effect.fn("loadStoredTaskTerminals")(function* (
+      context: OpenCodeSessionContext,
+    ) {
+      const messages = yield* runOpenCodeSdk("session.messages", () =>
+        context.client.session.messages({ sessionID: context.openCodeSessionId }),
+      );
+      const latestByTaskId = new Map<
+        RuntimeTaskId,
+        {
+          callId: string | undefined;
+          terminal: { notification: OpenCodeTaskNotification; raw: Part } | undefined;
+        }
+      >();
+
+      for (const entry of messages.data ?? []) {
+        for (const part of entry.parts) {
+          if (entry.info.role === "assistant" && part.type === "tool") {
+            const taskId = taskIdFromPart(part);
+            if (taskId) {
+              const current = latestByTaskId.get(taskId);
+              if (current?.callId !== part.callID) {
+                latestByTaskId.set(taskId, {
+                  callId: part.callID,
+                  terminal: undefined,
+                });
+              }
+            }
+          }
+
+          const terminal = taskNotificationFromPart(part);
+          if (!terminal) {
+            continue;
+          }
+          const current = latestByTaskId.get(terminal.taskId);
+          if (current) {
+            current.terminal = { notification: terminal, raw: part };
+          } else {
+            latestByTaskId.set(terminal.taskId, {
+              callId: undefined,
+              terminal: { notification: terminal, raw: part },
+            });
+          }
+        }
+      }
+
+      return Array.from(latestByTaskId.values()).flatMap(
+        (state): ReadonlyArray<OpenCodeStoredTaskTerminal> =>
+          state.terminal
+            ? [
+                {
+                  notification: state.terminal.notification,
+                  raw: state.terminal.raw,
+                  eventId: EventId.make(
+                    `opencode-task-history:${context.session.threadId}:${context.openCodeSessionId}:${state.terminal.raw.id}`,
+                  ),
+                },
+              ]
+            : [],
+      );
     });
 
     const handleSubscribedEvent = Effect.fn("handleSubscribedEvent")(function* (
@@ -1423,42 +1502,49 @@ export function makeOpenCodeAdapter(
       }
     });
 
-    const startEventPump = Effect.fn("startEventPump")(function* (context: OpenCodeSessionContext) {
+    const prepareEventSubscription = Effect.fn("prepareEventSubscription")(function* (
+      context: OpenCodeSessionContext,
+    ) {
       // One AbortController per session scope. The finalizer fires when
       // the scope closes (explicit stop, unexpected exit, or layer
       // shutdown) and cancels the in-flight `event.subscribe` fetch so
       // the async iterable unwinds cleanly.
-      const eventsAbortController = new AbortController();
+      const controller = new AbortController();
       yield* Scope.addFinalizer(
         context.sessionScope,
-        Effect.sync(() => eventsAbortController.abort()),
+        Effect.sync(() => controller.abort()),
       );
 
+      const subscription = yield* runOpenCodeSdk("event.subscribe", () =>
+        context.client.event.subscribe(undefined, {
+          signal: controller.signal,
+        }),
+      );
+      return { controller, stream: subscription.stream } satisfies OpenCodePreparedSubscription;
+    });
+
+    const startEventPump = Effect.fn("startEventPump")(function* (
+      context: OpenCodeSessionContext,
+      prepared: OpenCodePreparedSubscription,
+    ) {
       // Fibers forked into `context.sessionScope` are interrupted
       // automatically when the scope closes — no bookkeeping required.
-      yield* Effect.flatMap(
-        runOpenCodeSdk("event.subscribe", () =>
-          context.client.event.subscribe(undefined, {
-            signal: eventsAbortController.signal,
+      yield* Stream.fromAsyncIterable(
+        prepared.stream,
+        (cause) =>
+          new OpenCodeRuntimeError({
+            operation: "event.subscribe",
+            detail: openCodeRuntimeErrorDetail(cause),
+            cause,
           }),
-        ),
-        (subscription) =>
-          Stream.fromAsyncIterable(
-            subscription.stream,
-            (cause) =>
-              new OpenCodeRuntimeError({
-                operation: "event.subscribe",
-                detail: openCodeRuntimeErrorDetail(cause),
-                cause,
-              }),
-          ).pipe(Stream.runForEach((event) => handleSubscribedEvent(context, event))),
       ).pipe(
+        Stream.runForEach((event) => handleSubscribedEvent(context, event)),
         Effect.exit,
         Effect.flatMap((exit) =>
           Effect.gen(function* () {
             // Expected paths: caller aborted the fetch or the session
             // has already been marked stopped. Treat as a clean exit.
-            if (eventsAbortController.signal.aborted || (yield* Ref.get(context.stopped))) {
+            if (prepared.controller.signal.aborted || (yield* Ref.get(context.stopped))) {
               return;
             }
             if (Exit.isFailure(exit)) {
@@ -1568,7 +1654,7 @@ export function makeOpenCodeAdapter(
                       permission: buildOpenCodePermissionRules(input.runtimeMode),
                     }),
                   );
-                  return { openCodeSession: reusable, created: false };
+                  return { openCodeSession: reusable, origin: "reused" as const };
                 }
 
                 // The session lives under a different cwd (e.g. the thread
@@ -1595,7 +1681,7 @@ export function makeOpenCodeAdapter(
                       permission: buildOpenCodePermissionRules(input.runtimeMode),
                     }),
                   );
-                  return { openCodeSession: forked, created: true };
+                  return { openCodeSession: forked, origin: "forked" as const };
                 }
 
                 if (resumeSessionId) {
@@ -1615,7 +1701,7 @@ export function makeOpenCodeAdapter(
                     detail: "OpenCode session.create returned no session payload.",
                   });
                 }
-                return { openCodeSession: createdSession.data, created: true };
+                return { openCodeSession: createdSession.data, origin: "fresh" as const };
               });
 
               return {
@@ -1623,7 +1709,7 @@ export function makeOpenCodeAdapter(
                 server,
                 client,
                 openCodeSession: resolved.openCodeSession,
-                created: resolved.created,
+                origin: resolved.origin,
               };
             }).pipe(Effect.provideService(Scope.Scope, sessionScope)),
           );
@@ -1633,24 +1719,6 @@ export function makeOpenCodeAdapter(
           }
           return startedExit.value;
         });
-
-        // Guard against a concurrent startSession call that may have raced
-        // and already inserted a session while we were awaiting async work.
-        const raceWinner = sessions.get(input.threadId);
-        if (raceWinner) {
-          // Another call won the race — clean up. Only abort the remote
-          // session if we created it here; a resumed one is shared upstream
-          // state the winner is now using.
-          if (started.created) {
-            yield* runOpenCodeSdk("session.abort", () =>
-              started.client.session.abort({
-                sessionID: started.openCodeSession.id,
-              }),
-            ).pipe(Effect.ignore);
-          }
-          yield* Scope.close(started.sessionScope, Exit.void).pipe(Effect.ignore);
-          return raceWinner.session;
-        }
 
         const createdAt = yield* nowIso;
         const session: ProviderSession = {
@@ -1692,8 +1760,38 @@ export function makeOpenCodeAdapter(
           stopped: yield* Ref.make(false),
           sessionScope: started.sessionScope,
         };
+        const subscriptionExit = yield* Effect.exit(prepareEventSubscription(context));
+        if (Exit.isFailure(subscriptionExit)) {
+          const cause = Cause.squash(subscriptionExit.cause);
+          yield* stopOpenCodeContext(context).pipe(Effect.ignoreCause);
+          return yield* toProcessError(input.threadId, cause);
+        }
+        const storedTaskTerminals =
+          started.origin === "fresh"
+            ? []
+            : yield* loadStoredTaskTerminals(context).pipe(
+                Effect.catch((cause) =>
+                  Effect.logWarning(
+                    `OpenCode Task history reconciliation failed: ${openCodeRuntimeErrorDetail(cause)}`,
+                  ).pipe(Effect.as([] as ReadonlyArray<OpenCodeStoredTaskTerminal>)),
+                ),
+              );
+
+        // Guard after every startup await. A concurrent call may have inserted
+        // the winner while this call established its event subscription.
+        const raceWinner = sessions.get(input.threadId);
+        if (raceWinner) {
+          if (started.origin !== "reused") {
+            yield* runOpenCodeSdk("session.abort", () =>
+              started.client.session.abort({
+                sessionID: started.openCodeSession.id,
+              }),
+            ).pipe(Effect.ignore);
+          }
+          yield* Scope.close(started.sessionScope, Exit.void).pipe(Effect.ignore);
+          return raceWinner.session;
+        }
         sessions.set(input.threadId, context);
-        yield* startEventPump(context);
 
         yield* emit({
           ...(yield* buildEventBase({ threadId: input.threadId })),
@@ -1709,6 +1807,16 @@ export function makeOpenCodeAdapter(
             providerThreadId: started.openCodeSession.id,
           },
         });
+        for (const terminal of storedTaskTerminals) {
+          yield* emitTaskNotification(
+            context,
+            terminal.notification,
+            undefined,
+            terminal.raw,
+            terminal.eventId,
+          );
+        }
+        yield* startEventPump(context, subscriptionExit.value);
 
         return session;
       },
