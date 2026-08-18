@@ -1636,6 +1636,76 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
+  it.effect("recovers stored foreground Task terminals after reconnect", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-foreground-task-history");
+      runtimeMock.state.messages = [
+        messageEntry(
+          "msg-history-completed",
+          "assistant",
+          taskPart({
+            id: "history-completed",
+            taskId: "task-history-completed",
+            description: "Inspect completed history",
+            role: "explore",
+            status: "completed",
+            result: "Stored completed result.",
+          }),
+        ),
+        messageEntry(
+          "msg-history-failed",
+          "assistant",
+          taskPart({
+            id: "history-failed",
+            taskId: "task-history-failed",
+            description: "Inspect failed history",
+            role: "general",
+            status: "error",
+            result: "Stored failure.",
+          }),
+        ),
+        messageEntry(
+          "msg-history-background-running",
+          "assistant",
+          taskPart({
+            id: "history-background-running",
+            taskId: "task-history-background-running",
+            description: "Inspect background history",
+            role: "explore",
+            status: "completed",
+            background: true,
+          }),
+        ),
+      ];
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId && event.type === "task.completed"),
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+        resumeCursor: { schemaVersion: 1, sessionId: OPEN_CODE_SESSION_ID },
+      });
+
+      const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+      NodeAssert.deepEqual(
+        events.map((event) => {
+          NodeAssert.ok(event.type === "task.completed");
+          return [event.payload.taskId, event.payload.status, event.payload.summary];
+        }),
+        [
+          ["task-history-completed", "completed", "Stored completed result."],
+          ["task-history-failed", "failed", "Stored failure."],
+        ],
+      );
+    }),
+  );
+
   it.effect("deduplicates a background terminal seen in stored and live events", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;

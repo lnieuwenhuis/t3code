@@ -654,6 +654,30 @@ function taskNotificationFromPart(part: Part): OpenCodeTaskNotification | undefi
   };
 }
 
+function taskNotificationFromToolPart(part: Part): OpenCodeTaskNotification | undefined {
+  if (
+    part.type !== "tool" ||
+    (part.state.status !== "completed" && part.state.status !== "error")
+  ) {
+    return undefined;
+  }
+  const taskId = taskIdFromPart(part);
+  if (
+    !taskId ||
+    (part.state.status === "completed" && part.state.metadata["background"] === true)
+  ) {
+    return undefined;
+  }
+  const summary = trimText(
+    part.state.status === "error" ? part.state.error : openCodeTaskResult(part.state.output),
+  );
+  return {
+    taskId,
+    status: part.state.status === "error" ? "failed" : "completed",
+    summary,
+  };
+}
+
 function taskLinkage(task: OpenCodeTaskLifecycle) {
   return {
     taskType: "subagent",
@@ -1024,7 +1048,9 @@ export function makeOpenCodeAdapter(
             }
           }
 
-          const terminal = taskNotificationFromPart(part);
+          const terminal =
+            taskNotificationFromPart(part) ??
+            (entry.info.role === "assistant" ? taskNotificationFromToolPart(part) : undefined);
           if (!terminal) {
             continue;
           }
