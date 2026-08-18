@@ -457,6 +457,30 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
+  it.effect("does not abort a reused session when event subscription fails", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-resumed-subscribe-failure");
+      runtimeMock.state.eventSubscribeError = new Error("event subscribe failed");
+
+      const result = yield* adapter
+        .startSession({
+          provider: ProviderDriverKind.make("opencode"),
+          threadId,
+          runtimeMode: "full-access",
+          resumeCursor: { schemaVersion: 1, sessionId: "ses_reused" },
+        })
+        .pipe(Effect.result);
+
+      NodeAssert.equal(result._tag, "Failure");
+      NodeAssert.deepEqual(runtimeMock.state.abortCalls, []);
+      NodeAssert.equal(
+        (yield* adapter.listSessions()).some((session) => session.threadId === threadId),
+        false,
+      );
+    }),
+  );
+
   it.effect("returns a durable resume cursor for a freshly created session", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
@@ -1564,6 +1588,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
             status: "completed",
             resumed: true,
             background: true,
+            model: { providerID: "anthropic", modelID: "claude-sonnet" },
           }),
         ),
         messageEntry(
@@ -1598,6 +1623,10 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       for (const completed of events) {
         NodeAssert.ok(completed.type === "task.completed");
         NodeAssert.equal(completed.payload.summary, "Latest result.");
+        NodeAssert.equal(completed.payload.title, "Inspect resumed history");
+        NodeAssert.equal(completed.payload.role, "general");
+        NodeAssert.equal(completed.payload.model, "anthropic/claude-sonnet");
+        NodeAssert.equal(completed.payload.toolUseId, "call-history-resumed");
       }
       NodeAssert.equal(events[0]?.eventId, events[1]?.eventId);
       NodeAssert.deepEqual(runtimeMock.state.sessionMessagesCalls, [

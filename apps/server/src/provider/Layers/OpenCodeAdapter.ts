@@ -201,6 +201,7 @@ interface OpenCodeStoredTaskTerminal {
   readonly notification: OpenCodeTaskNotification;
   readonly raw: Part;
   readonly eventId: EventId;
+  readonly task: OpenCodeTaskLifecycle | undefined;
 }
 
 function trimText(value: string | undefined | null): string | undefined {
@@ -1000,6 +1001,7 @@ export function makeOpenCodeAdapter(
         RuntimeTaskId,
         {
           callId: string | undefined;
+          task: OpenCodeTaskLifecycle | undefined;
           terminal: { notification: OpenCodeTaskNotification; raw: Part } | undefined;
         }
       >();
@@ -1013,8 +1015,11 @@ export function makeOpenCodeAdapter(
               if (current?.callId !== part.callID) {
                 latestByTaskId.set(taskId, {
                   callId: part.callID,
+                  task: taskLifecycleFromPart(part, undefined),
                   terminal: undefined,
                 });
+              } else {
+                current.task = taskLifecycleFromPart(part, current.task);
               }
             }
           }
@@ -1029,6 +1034,7 @@ export function makeOpenCodeAdapter(
           } else {
             latestByTaskId.set(terminal.taskId, {
               callId: undefined,
+              task: undefined,
               terminal: { notification: terminal, raw: part },
             });
           }
@@ -1045,6 +1051,7 @@ export function makeOpenCodeAdapter(
                   eventId: EventId.make(
                     `opencode-task-history:${context.session.threadId}:${context.openCodeSessionId}:${state.terminal.raw.id}`,
                   ),
+                  task: state.task,
                 },
               ]
             : [],
@@ -1763,7 +1770,11 @@ export function makeOpenCodeAdapter(
         const subscriptionExit = yield* Effect.exit(prepareEventSubscription(context));
         if (Exit.isFailure(subscriptionExit)) {
           const cause = Cause.squash(subscriptionExit.cause);
-          yield* stopOpenCodeContext(context).pipe(Effect.ignoreCause);
+          if (started.origin === "reused") {
+            yield* Scope.close(started.sessionScope, Exit.void).pipe(Effect.ignoreCause);
+          } else {
+            yield* stopOpenCodeContext(context).pipe(Effect.ignoreCause);
+          }
           return yield* toProcessError(input.threadId, cause);
         }
         const storedTaskTerminals =
@@ -1808,6 +1819,9 @@ export function makeOpenCodeAdapter(
           },
         });
         for (const terminal of storedTaskTerminals) {
+          if (terminal.task) {
+            context.taskLifecycleByTaskId.set(terminal.notification.taskId, terminal.task);
+          }
           yield* emitTaskNotification(
             context,
             terminal.notification,
