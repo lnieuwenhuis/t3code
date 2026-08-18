@@ -1186,6 +1186,18 @@ export function makeOpenCodeAdapter(
                           },
                         },
                   );
+                  if (!previousTask && typeof part.state.input["task_id"] === "string") {
+                    yield* emit({
+                      ...startedBase,
+                      type: "task.updated",
+                      payload: {
+                        taskId: task.taskId,
+                        status: "running",
+                        ...(task.description ? { description: task.description } : {}),
+                        ...linkage,
+                      },
+                    });
+                  }
                 }
                 if (!completedBeforeStart) {
                   task.status = "running";

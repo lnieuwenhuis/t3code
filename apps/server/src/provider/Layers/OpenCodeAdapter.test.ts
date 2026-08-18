@@ -1318,6 +1318,14 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         resumed: true,
         omitMetadata: true,
       });
+      const restored = taskPart({
+        id: "restored",
+        taskId: "task-restored",
+        description: "Resume after reconnect",
+        role: "explore",
+        status: "running",
+        resumed: true,
+      });
       runtimeMock.state.subscribedEvents = [
         partUpdated(foreground),
         partUpdated(
@@ -1332,6 +1340,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
           }),
         ),
         ...[resumed, resumed, failed, failed].map(partUpdated),
+        partUpdated(restored),
         partUpdated(
           taskPart({
             id: "background",
@@ -1352,7 +1361,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
               event.type === "task.updated" ||
               event.type === "task.completed"),
         ),
-        Stream.take(6),
+        Stream.take(8),
         Stream.runCollect,
         Effect.forkChild,
       );
@@ -1388,6 +1397,8 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
           ],
           ["task.updated", "task-foreground", "running", undefined],
           ["task.completed", "task-foreground", "failed", "Child session failed"],
+          ["task.started", "task-restored", undefined, undefined],
+          ["task.updated", "task-restored", "running", undefined],
           ["task.started", "task-background", undefined, undefined],
           ["task.completed", "task-background", "completed", "Background inspection finished."],
         ],
@@ -1404,7 +1415,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       const failedEvent = events[3];
       NodeAssert.ok(failedEvent?.type === "task.completed");
       NodeAssert.equal(failedEvent.payload.model, "anthropic/claude-sonnet");
-      const backgroundEvent = events[5];
+      const backgroundEvent = events[7];
       NodeAssert.ok(backgroundEvent?.type === "task.completed");
       NodeAssert.equal(backgroundEvent.payload.title, "Inspect background path");
     }),
