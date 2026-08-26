@@ -24,7 +24,11 @@ import { connectionProjectionPhase } from "../connection/model.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import * as ConnectionWakeups from "../connection/wakeups.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
-import { subscribeDynamic } from "../rpc/client.ts";
+import {
+  type DynamicSubscriptionGeneration,
+  type DynamicSubscriptionItem,
+  subscribeDynamicWithGeneration,
+} from "../rpc/client.ts";
 import { ThreadSnapshotLoader, type ThreadSnapshotWindow } from "./threadSnapshotHttp.ts";
 import { parseThreadKey, threadKey } from "./entities.ts";
 import { applyThreadDetailEvent } from "./threadReducer.ts";
@@ -176,6 +180,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     Option.match(cached, { onNone: () => 0, onSome: (snapshot) => snapshot.snapshotSequence }),
   );
   const awaitingCompletion = yield* Ref.make(false);
+  const activeSubscriptionGeneration = yield* Ref.make<DynamicSubscriptionGeneration | null>(null);
   // Bumped whenever loaded history may have been rewritten out from under an
   // in-flight older-page fetch (snapshot replacement, revert, deletion). A
   // page response captured under an older epoch is discarded, not merged.
@@ -481,19 +486,29 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   // the fold per publication and release the lock between slices so an
   // older-page load can interleave with a large replay backlog.
   const applyItems = Effect.fn("EnvironmentThreadState.applyItems")(function* (
-    items: ReadonlyArray<OrchestrationThreadStreamItem>,
+    items: ReadonlyArray<DynamicSubscriptionItem<OrchestrationThreadStreamItem>>,
   ) {
     for (let start = 0; start < items.length; start += MAX_STREAM_ITEMS_PER_PUBLISH) {
       if (start > 0) {
         yield* Effect.yieldNow;
       }
       yield* applyLock.withPermits(1)(
-        applyItemsLocked(items.slice(start, start + MAX_STREAM_ITEMS_PER_PUBLISH)),
+        Effect.gen(function* () {
+          const activeGeneration = yield* Ref.get(activeSubscriptionGeneration);
+          const currentSession = Option.getOrNull(yield* SubscriptionRef.get(supervisor.session));
+          const activeItems = items
+            .slice(start, start + MAX_STREAM_ITEMS_PER_PUBLISH)
+            .filter(
+              (item) => item.session === currentSession && item.generation === activeGeneration,
+            )
+            .map((item) => item.value);
+          if (activeItems.length > 0) {
+            yield* applyItemsLocked(activeItems);
+          }
+        }),
       );
     }
   });
-
-  const applyItem = (item: OrchestrationThreadStreamItem) => applyItems([item]);
 
   // Merges an older disjoint page below the currently loaded window. All four
   // windowed collections prepend; identity dedupe guards the (server-bug or
@@ -643,9 +658,13 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
   yield* setSynchronizing;
   yield* Effect.forkScoped(
-    subscribeDynamic(
+    subscribeDynamicWithGeneration(
       ORCHESTRATION_WS_METHODS.subscribeThread,
-      Effect.fn("EnvironmentThreadState.makeSubscribeInput")(function* (session) {
+      Effect.fn("EnvironmentThreadState.makeSubscribeInput")(function* (session, generation) {
+        // Establish a new application generation under the same lock as
+        // batches. An old batch already in progress finishes before this;
+        // every old slice still buffered after this point is discarded.
+        yield* applyLock.withPermits(1)(Ref.set(activeSubscriptionGeneration, generation));
         const config = yield* session.initialConfig.pipe(
           Effect.orElseSucceed(
             () =>
@@ -688,6 +707,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           );
           current = yield* SubscriptionRef.get(state);
         }
+        let httpSnapshot = Option.none<OrchestrationThreadDetailSnapshot>();
         if (Option.isNone(current.data) && current.status !== "deleted") {
           const prepared = yield* SubscriptionRef.get(supervisor.prepared).pipe(
             Effect.flatMap(
@@ -703,30 +723,37 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
               }),
             ),
           );
-          const httpSnapshot = yield* snapshotLoader.load(
+          httpSnapshot = yield* snapshotLoader.load(
             prepared,
             threadId,
             supportsPagination ? { turnLimit: INITIAL_THREAD_USER_TURN_LIMIT } : undefined,
           );
-          if (Option.isSome(httpSnapshot)) {
-            yield* applyItem({ kind: "snapshot", snapshot: httpSnapshot.value });
-            current = yield* SubscriptionRef.get(state);
-          }
         }
 
-        const sequence = yield* SubscriptionRef.get(lastSequence);
-        const canResume = Option.isSome(current.data);
-        if (!supportsCompletionMarker && canResume) {
-          yield* SubscriptionRef.update(state, (value) => ({
-            ...value,
-            status: value.status === "deleted" ? value.status : ("live" as const),
-            error: Option.none(),
-          }));
-        }
+        // Seed, state read, and cursor read are one critical section. No batch
+        // can land between the state we resume from and its afterSequence.
+        const resume = yield* applyLock.withPermits(1)(
+          Effect.gen(function* () {
+            if (Option.isSome(httpSnapshot)) {
+              yield* applyItemsLocked([{ kind: "snapshot", snapshot: httpSnapshot.value }]);
+            }
+            current = yield* SubscriptionRef.get(state);
+            const sequence = yield* SubscriptionRef.get(lastSequence);
+            const canResume = Option.isSome(current.data);
+            if (!supportsCompletionMarker && canResume) {
+              yield* SubscriptionRef.update(state, (value) => ({
+                ...value,
+                status: value.status === "deleted" ? value.status : ("live" as const),
+                error: Option.none(),
+              }));
+            }
+            return { canResume, sequence };
+          }),
+        );
 
         return {
           threadId,
-          ...(canResume ? { afterSequence: sequence } : {}),
+          ...(resume.canResume ? { afterSequence: resume.sequence } : {}),
           ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
           // The WS fallback snapshot (sent when afterSequence is missing or
           // the gap is too large) should be windowed the same as the HTTP

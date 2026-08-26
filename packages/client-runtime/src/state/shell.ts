@@ -21,7 +21,11 @@ import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import * as ConnectionWakeups from "../connection/wakeups.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
-import { subscribeDynamic } from "../rpc/client.ts";
+import {
+  type DynamicSubscriptionGeneration,
+  type DynamicSubscriptionItem,
+  subscribeDynamicWithGeneration,
+} from "../rpc/client.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import { ShellSnapshotLoader } from "./shellSnapshotHttp.ts";
 import { applyShellStreamEvent } from "./shellReducer.ts";
@@ -75,6 +79,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
   const awaitingCompletion = yield* Ref.make(false);
   const lastAuthoritativeSession = yield* Ref.make<RpcSession | null>(null);
   const activeSubscriptionSession = yield* Ref.make<RpcSession | null>(null);
+  const activeSubscriptionGeneration = yield* Ref.make<DynamicSubscriptionGeneration | null>(null);
   const persistence = yield* Queue.sliding<OrchestrationShellSnapshot>(1);
   // Serializes batch folds against the subscription's HTTP seed: the fold is
   // a read-modify-write over the snapshot, and one interleaving with the seed
@@ -212,8 +217,21 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
   // the subscription's Stream.buffer: whatever accumulated while the
   // previous batch applied folds into the next one, so publication count
   // tracks how fast the client applies instead of how fast the server emits.
-  const applyItems = (items: ReadonlyArray<OrchestrationShellStreamItem>) =>
-    applyLock.withPermits(1)(applyItemsLocked(items));
+  const applyItems = (
+    items: ReadonlyArray<DynamicSubscriptionItem<OrchestrationShellStreamItem>>,
+  ) =>
+    applyLock.withPermits(1)(
+      Effect.gen(function* () {
+        const activeGeneration = yield* Ref.get(activeSubscriptionGeneration);
+        const currentSession = Option.getOrNull(yield* SubscriptionRef.get(supervisor.session));
+        const activeItems = items
+          .filter((item) => item.session === currentSession && item.generation === activeGeneration)
+          .map((item) => item.value);
+        if (activeItems.length > 0) {
+          yield* applyItemsLocked(activeItems);
+        }
+      }),
+    );
 
   const foregroundResubscriptions = Option.match(wakeups, {
     onNone: () => Stream.never,
@@ -223,10 +241,20 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
 
   yield* setSynchronizing;
   yield* Effect.forkScoped(
-    subscribeDynamic(
+    subscribeDynamicWithGeneration(
       ORCHESTRATION_WS_METHODS.subscribeShell,
-      Effect.fn("EnvironmentShellState.makeSubscribeInput")(function* (session) {
-        yield* Ref.set(activeSubscriptionSession, session);
+      Effect.fn("EnvironmentShellState.makeSubscribeInput")(function* (session, generation) {
+        // Wait for an in-flight old-session fold, then invalidate every old
+        // item still buffered downstream before reading the resume baseline.
+        yield* applyLock.withPermits(1)(
+          Effect.all(
+            [
+              Ref.set(activeSubscriptionSession, session),
+              Ref.set(activeSubscriptionGeneration, generation),
+            ],
+            { discard: true },
+          ),
+        );
         const supportsCompletionMarker = yield* session.initialConfig.pipe(
           Effect.map((config) => config.shellResumeCompletionMarker === true),
           Effect.orElseSucceed(() => false),

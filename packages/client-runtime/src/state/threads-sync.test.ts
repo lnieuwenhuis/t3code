@@ -734,6 +734,46 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
+  it.effect("drops buffered items from the replaced subscription", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ cached: BASE_THREAD, completionMarker: true });
+      const firstSlice = Array.from({ length: 128 }, (_, index) =>
+        titleUpdated(`Old title ${index + 1}`, CACHED_SNAPSHOT_SEQUENCE + index + 1),
+      );
+      yield* Queue.offerAll(harness.inputs, [
+        ...firstSlice,
+        {
+          kind: "snapshot" as const,
+          snapshot: {
+            snapshotSequence: 999,
+            thread: { ...BASE_THREAD, title: "Stale old-session snapshot" },
+          },
+        },
+      ]);
+
+      // applyItems yields between 128-item slices. Replace the session while
+      // the stale snapshot is already buffered but has not been applied.
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => Option.isSome(value.data) && value.data.value.title === "Old title 128",
+      );
+      yield* harness.replaceSession;
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if ((yield* Ref.get(harness.subscriptionCount)) >= 2) break;
+        yield* Effect.yieldNow;
+      }
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        yield* Effect.yieldNow;
+      }
+
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(2);
+      expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(
+        CACHED_SNAPSHOT_SEQUENCE + firstSlice.length,
+      );
+      expect(Option.getOrThrow((yield* Ref.get(harness.latest)).data).title).toBe("Old title 128");
+    }),
+  );
+
   it.effect("resubscribes on app foreground from the latest applied sequence", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ cached: BASE_THREAD, completionMarker: true });
