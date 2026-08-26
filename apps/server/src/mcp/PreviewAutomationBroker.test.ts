@@ -1066,8 +1066,9 @@ it.effect("routes a wait budget that leaves the host room to report a failure", 
 
       yield* broker.invoke<string>({ scope, operation: "snapshot", input: {}, timeoutMs: 15_000 });
       yield* broker.invoke<string>({ scope, operation: "snapshot", input: {}, timeoutMs: 200 });
+      yield* broker.invoke<string>({ scope, operation: "snapshot", input: {}, timeoutMs: 1 });
 
-      expect(routedRequests.map((request) => request.timeoutMs)).toEqual([14_000, 180]);
+      expect(routedRequests.map((request) => request.timeoutMs)).toEqual([14_000, 180, 0]);
     }),
   ),
 );

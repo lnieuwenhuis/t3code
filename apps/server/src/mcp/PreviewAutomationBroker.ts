@@ -182,7 +182,7 @@ const HOST_RESPONSE_MARGIN_MS = 1_000;
  * reported into a request nobody was waiting on any more.
  */
 const hostResponseBudgetMs = (timeoutMs: number): number =>
-  Math.max(1, timeoutMs - Math.min(HOST_RESPONSE_MARGIN_MS, Math.ceil(timeoutMs / 10)));
+  Math.max(0, timeoutMs - Math.min(HOST_RESPONSE_MARGIN_MS, Math.ceil(timeoutMs / 10)));
 
 const isPreviewAutomationTimeoutStage = Schema.is(PreviewAutomationTimeoutStage);
 
