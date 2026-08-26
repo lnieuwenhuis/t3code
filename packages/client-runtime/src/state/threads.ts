@@ -670,14 +670,22 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         // older turns can never be loaded (the server has no cursor reads).
         // Drop the window marker and treat the data as needing a full reload.
         if (!supportsPagination && Option.isSome(current.page)) {
-          yield* Ref.update(historyEpoch, (epoch) => epoch + 1);
-          yield* SubscriptionRef.update(state, (value) => ({
-            ...value,
-            data: Option.none(),
-            status: value.status === "deleted" ? value.status : ("empty" as const),
-            page: Option.none(),
-          }));
-          yield* SubscriptionRef.set(lastSequence, 0);
+          // The reset runs under applyLock: a batch fold reads its baseline
+          // once, so an unserialized reset landing mid-fold would be written
+          // right back, resurrecting the windowed data (and a non-zero
+          // lastSequence) this exists to destroy.
+          yield* applyLock.withPermits(1)(
+            Effect.gen(function* () {
+              yield* Ref.update(historyEpoch, (epoch) => epoch + 1);
+              yield* SubscriptionRef.update(state, (value) => ({
+                ...value,
+                data: Option.none(),
+                status: value.status === "deleted" ? value.status : ("empty" as const),
+                page: Option.none(),
+              }));
+              yield* SubscriptionRef.set(lastSequence, 0);
+            }),
+          );
           current = yield* SubscriptionRef.get(state);
         }
         if (Option.isNone(current.data) && current.status !== "deleted") {
@@ -735,8 +743,10 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       // Decouple delivery from application: the buffer's consumer receives
       // whatever accumulated while the previous batch applied — one item when
       // the client keeps up, the whole backlog when it does not — adding no
-      // latency to either case.
-      Stream.buffer({ capacity: "unbounded" }),
+      // latency to either case. The finite capacity preserves the transport's
+      // end-to-end backpressure: past it, the un-applied backlog waits on the
+      // server instead of growing this client's heap.
+      Stream.buffer({ capacity: 4096, strategy: "suspend" }),
       Stream.chunks,
       Stream.runForEach(applyItems),
     ),

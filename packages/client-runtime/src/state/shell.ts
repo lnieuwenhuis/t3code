@@ -10,6 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
@@ -75,6 +76,11 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
   const lastAuthoritativeSession = yield* Ref.make<RpcSession | null>(null);
   const activeSubscriptionSession = yield* Ref.make<RpcSession | null>(null);
   const persistence = yield* Queue.sliding<OrchestrationShellSnapshot>(1);
+  // Serializes batch folds against the subscription's HTTP seed: the fold is
+  // a read-modify-write over the snapshot, and one interleaving with the seed
+  // would write the fold's older baseline over the seeded snapshot after
+  // afterSequence was already computed from it, silently losing the gap.
+  const applyLock = yield* Semaphore.make(1);
 
   const persist = Effect.fn("EnvironmentShellState.persist")(function* (
     snapshot: OrchestrationShellSnapshot,
@@ -176,11 +182,8 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     yield* Queue.offer(persistence, nextSnapshot);
   });
 
-  // Applies a batch of stream items. Batches form adaptively downstream of
-  // the subscription's Stream.buffer: whatever accumulated while the
-  // previous batch applied folds into the next one, so publication count
-  // tracks how fast the client applies instead of how fast the server emits.
-  const applyItems = Effect.fn("EnvironmentShellState.applyItems")(function* (
+  // Body of applyItems, running under applyLock.
+  const applyItemsLocked = Effect.fn("EnvironmentShellState.applyItemsLocked")(function* (
     items: ReadonlyArray<OrchestrationShellStreamItem>,
   ) {
     let run: Array<Exclude<OrchestrationShellStreamItem, { kind: "synchronized" }>> = [];
@@ -205,7 +208,12 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     }
   });
 
-  const applyItem = (item: OrchestrationShellStreamItem) => applyItems([item]);
+  // Applies a batch of stream items. Batches form adaptively downstream of
+  // the subscription's Stream.buffer: whatever accumulated while the
+  // previous batch applied folds into the next one, so publication count
+  // tracks how fast the client applies instead of how fast the server emits.
+  const applyItems = (items: ReadonlyArray<OrchestrationShellStreamItem>) =>
+    applyLock.withPermits(1)(applyItemsLocked(items));
 
   const foregroundResubscriptions = Option.match(wakeups, {
     onNone: () => Stream.never,
@@ -249,9 +257,15 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
           );
           const httpSnapshot = yield* snapshotLoader.load(prepared);
           if (Option.isSome(httpSnapshot)) {
-            yield* applyItem({ kind: "snapshot", snapshot: httpSnapshot.value });
+            // Apply the seed and capture the resulting cursor in one critical
+            // section so a batch draining concurrently cannot slip between
+            // them; the fold itself is lock-serialized for the same reason.
+            current = yield* applyLock.withPermits(1)(
+              applyItemsLocked([{ kind: "snapshot", snapshot: httpSnapshot.value }]).pipe(
+                Effect.andThen(SubscriptionRef.get(state)),
+              ),
+            );
             canResume = true;
-            current = yield* SubscriptionRef.get(state);
           }
         }
 
@@ -283,8 +297,10 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       // Decouple delivery from application: the buffer's consumer receives
       // whatever accumulated while the previous batch applied — one item when
       // the client keeps up, the whole backlog when it does not — adding no
-      // latency to either case.
-      Stream.buffer({ capacity: "unbounded" }),
+      // latency to either case. The finite capacity preserves the transport's
+      // end-to-end backpressure: past it, the un-applied backlog waits on the
+      // server instead of growing this client's heap.
+      Stream.buffer({ capacity: 4096, strategy: "suspend" }),
       Stream.chunks,
       Stream.runForEach(applyItems),
     ),
