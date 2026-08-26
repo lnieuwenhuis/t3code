@@ -16,7 +16,13 @@ import type {
 
 import { resolveAnnotationSubmission } from "./AnnotationKeyboard.ts";
 import type { StrokeGeometry } from "./AnnotationStroke.ts";
-import { beginStroke, extendStroke, strokeBounds, strokePath } from "./AnnotationStroke.ts";
+import {
+  beginStroke,
+  extendStroke,
+  strokeBounds,
+  strokeChunkPath,
+  takeClosedChunk,
+} from "./AnnotationStroke.ts";
 import { previewAnnotationStyles } from "./AnnotationStyles.generated.ts";
 import {
   ANNOTATION_CAPTURED_CHANNEL,
@@ -457,7 +463,8 @@ function startAnnotation(): void {
   let dragStart: PreviewAnnotationPoint | null = null;
   let activeStroke: {
     target: PreviewAnnotationStrokeTarget;
-    path: SVGPathElement;
+    group: SVGGElement;
+    chunkPath: SVGPathElement;
     geometry: StrokeGeometry;
   } | null = null;
   let pendingCapture = false;
@@ -1052,7 +1059,16 @@ function startAnnotation(): void {
     if (tool === "draw" && activeStroke) {
       extendStroke(activeStroke.geometry, { x: event.clientX, y: event.clientY });
       activeStroke.target.bounds = strokeBounds(activeStroke.geometry, activeStroke.target.width);
-      activeStroke.path.setAttribute("d", strokePath(activeStroke.geometry));
+      // Only the growing chunk's `d` is ever rewritten, so the renderer never
+      // re-parses more than one chunk of path text per move.
+      const closedChunk = takeClosedChunk(activeStroke.geometry);
+      if (closedChunk !== null) {
+        activeStroke.chunkPath.setAttribute("d", closedChunk);
+        const nextChunk = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        activeStroke.group.appendChild(nextChunk);
+        activeStroke.chunkPath = nextChunk;
+      }
+      activeStroke.chunkPath.setAttribute("d", strokeChunkPath(activeStroke.geometry));
     }
   };
 
@@ -1079,16 +1095,18 @@ function startAnnotation(): void {
         points: geometry.points,
         bounds: { x: dragStart.x, y: dragStart.y, width: 1, height: 1 },
       };
-      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      path.setAttribute(OVERLAY_ATTRIBUTE, "");
-      path.setAttribute("data-stroke-id", stroke.id);
-      path.setAttribute("fill", "none");
-      path.setAttribute("stroke", stroke.color);
-      path.setAttribute("stroke-width", String(stroke.width));
-      path.setAttribute("stroke-linecap", "round");
-      path.setAttribute("stroke-linejoin", "round");
-      svg.appendChild(path);
-      activeStroke = { target: stroke, path, geometry };
+      const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      group.setAttribute(OVERLAY_ATTRIBUTE, "");
+      group.setAttribute("data-stroke-id", stroke.id);
+      group.setAttribute("fill", "none");
+      group.setAttribute("stroke", stroke.color);
+      group.setAttribute("stroke-width", String(stroke.width));
+      group.setAttribute("stroke-linecap", "round");
+      group.setAttribute("stroke-linejoin", "round");
+      const chunkPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      group.appendChild(chunkPath);
+      svg.appendChild(group);
+      activeStroke = { target: stroke, group, chunkPath, geometry };
     }
   };
 
@@ -1115,7 +1133,7 @@ function startAnnotation(): void {
       }
     } else if (tool === "draw" && activeStroke) {
       if (activeStroke.target.points.length > 1) strokes.push(activeStroke.target);
-      else activeStroke.path.remove();
+      else activeStroke.group.remove();
       activeStroke = null;
     }
     dragStart = null;

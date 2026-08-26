@@ -1,7 +1,15 @@
 import type { PreviewAnnotationPoint, PreviewAnnotationRect } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { beginStroke, extendStroke, strokeBounds, strokePath } from "./AnnotationStroke.ts";
+import {
+  STROKE_CHUNK_SEGMENTS,
+  beginStroke,
+  extendStroke,
+  strokeBounds,
+  strokeChunkPath,
+  strokePath,
+  takeClosedChunk,
+} from "./AnnotationStroke.ts";
 
 /**
  * The rescan-everything implementations these helpers replaced. Kept here as
@@ -73,6 +81,40 @@ describe("stroke geometry", () => {
       { x: 0, y: 0 },
       { x: 5, y: 5 },
     ]);
+  });
+
+  it("splits rendering into chunks that reassemble to the uncut path", () => {
+    const points = wobble(505);
+    const geometry = beginStroke(points[0]!);
+    const closed: Array<string> = [];
+    let longestRewrite = 0;
+    for (let index = 1; index < points.length; index += 1) {
+      extendStroke(geometry, points[index]!);
+      const cut = takeClosedChunk(geometry);
+      if (cut !== null) closed.push(cut);
+      longestRewrite = Math.max(longestRewrite, strokeChunkPath(geometry).length);
+    }
+    expect(takeClosedChunk(geometry)).toBeNull();
+    expect(closed).toHaveLength(Math.floor((points.length - 2) / STROKE_CHUNK_SEGMENTS));
+
+    // Every cut hands over at the exact coordinates the next chunk resumes from.
+    const chunks = [...closed, geometry.chunk];
+    for (let index = 1; index < chunks.length; index += 1) {
+      const previous = chunks[index - 1]!;
+      const handover = previous.slice(previous.lastIndexOf(" Q"));
+      const [, , , midX, midY] = handover.trim().split(" ");
+      expect(chunks[index]!.startsWith(`M ${midX} ${midY}`)).toBe(true);
+    }
+
+    // Stripping each resume `M` and concatenating restores the uncut prefix.
+    const reassembled = chunks
+      .map((chunk, index) => (index === 0 ? chunk : chunk.replace(/^M [^ ]+ [^ ]+/, "")))
+      .join("");
+    expect(reassembled).toBe(geometry.prefix);
+
+    // The renderer only ever re-parses one chunk of path text per move.
+    expect(longestRewrite).toBeLessThan(5_000);
+    expect(strokePath(geometry).length).toBeGreaterThan(longestRewrite * 2);
   });
 
   it("survives a stroke longer than the engine's argument limit", () => {
