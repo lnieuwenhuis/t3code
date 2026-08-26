@@ -262,24 +262,11 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       ),
     );
 
-  const setThread = Effect.fn("EnvironmentThreadState.setThread")(function* (
-    thread: OrchestrationThread,
-    // "keep" preserves the current page state (live events touch only loaded
-    // recent turns); a snapshot or merged page passes its own page state.
-    page: Option.Option<EnvironmentThreadPageState> | "keep",
-  ) {
-    const waiting = yield* Ref.get(awaitingCompletion);
-    yield* SubscriptionRef.update(state, (current) => ({
-      data: Option.some(thread),
-      status: waiting ? ("synchronizing" as const) : ("live" as const),
-      error: Option.none(),
-      page: page === "keep" ? current.page : page,
-    }));
-    // Active threads can update many times per second and retain large tool
-    // payloads. The server remains the source of truth while a turn is active;
-    // persist once it settles so cache encoding stays off the streaming path.
-    if (shouldPersistThread(thread)) {
-      const snapshotSequence = yield* SubscriptionRef.get(lastSequence);
+  // Queues a thread for cache persistence under the sequence its content
+  // reflects. The page boundary is read at offer time: within an event run
+  // the page only changes through snapshots and merges, never events.
+  const offerThreadPersistence = Effect.fn("EnvironmentThreadState.offerThreadPersistence")(
+    function* (thread: OrchestrationThread, snapshotSequence: number) {
       const currentPage = yield* SubscriptionRef.get(state).pipe(Effect.map((value) => value.page));
       yield* Queue.offer(persistence, {
         snapshotSequence,
@@ -298,6 +285,28 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
             }) as const,
         }),
       });
+    },
+  );
+
+  const setThread = Effect.fn("EnvironmentThreadState.setThread")(function* (
+    thread: OrchestrationThread,
+    // "keep" preserves the current page state (live events touch only loaded
+    // recent turns); a snapshot or merged page passes its own page state.
+    page: Option.Option<EnvironmentThreadPageState> | "keep",
+  ) {
+    const waiting = yield* Ref.get(awaitingCompletion);
+    yield* SubscriptionRef.update(state, (current) => ({
+      data: Option.some(thread),
+      status: waiting ? ("synchronizing" as const) : ("live" as const),
+      error: Option.none(),
+      page: page === "keep" ? current.page : page,
+    }));
+    // Active threads can update many times per second and retain large tool
+    // payloads. The server remains the source of truth while a turn is active;
+    // persist once it settles so cache encoding stays off the streaming path.
+    if (shouldPersistThread(thread)) {
+      const snapshotSequence = yield* SubscriptionRef.get(lastSequence);
+      yield* offerThreadPersistence(thread, snapshotSequence);
     }
   });
 
@@ -360,6 +369,12 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     const current = yield* SubscriptionRef.get(state);
     let thread = Option.getOrNull(current.data);
     let updated = false;
+    // The last folded state the cache would accept, kept in case the run ends
+    // on a running session: a turn that settles mid-run with the next turn
+    // starting in the same run must still reach the cache, exactly as it did
+    // when every event published (and offered) individually.
+    let persistable: { readonly thread: OrchestrationThread; readonly sequence: number } | null =
+      null;
     for (const event of events) {
       if (event.sequence <= sequence) {
         continue;
@@ -385,11 +400,15 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       if (result.kind === "updated") {
         thread = result.thread;
         updated = true;
+        if (shouldPersistThread(result.thread)) {
+          persistable = { thread: result.thread, sequence };
+        }
       } else if (result.kind === "deleted") {
         yield* SubscriptionRef.set(lastSequence, sequence);
         yield* setDeleted();
         thread = null;
         updated = false;
+        persistable = null;
       }
     }
     if (sequence !== initialSequence) {
@@ -397,6 +416,9 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     }
     if (updated && thread !== null) {
       yield* setThread(thread, "keep");
+      if (persistable !== null && !shouldPersistThread(thread)) {
+        yield* offerThreadPersistence(persistable.thread, persistable.sequence);
+      }
     }
     // The events may have advanced the live state past a parked page's
     // watermark; merge it as soon as that happens.
