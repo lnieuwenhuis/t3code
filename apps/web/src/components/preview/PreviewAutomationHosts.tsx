@@ -76,6 +76,14 @@ import { shouldRollbackPreviewViewport } from "./previewViewportRollback";
 
 const PREVIEW_PRESENTATION_SETTLE_TIMEOUT_MS = 500;
 
+/**
+ * A per-operation timeout is the caller's whole request budget, which outlives
+ * the response budget the broker hands this host. Waiting past that budget
+ * reports the reason into a request the broker has already abandoned.
+ */
+const waitBudgetMs = (requestedMs: number | undefined, responseBudgetMs: number): number =>
+  requestedMs === undefined ? responseBudgetMs : Math.min(requestedMs, responseBudgetMs);
+
 const waitForPreviewPresentation = async (runtimeTabId: string): Promise<void> => {
   const deadline = Date.now() + PREVIEW_PRESENTATION_SETTLE_TIMEOUT_MS;
   while (Date.now() <= deadline) {
@@ -489,7 +497,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
               ready.runtimeTabId,
               request.operation,
               input.readiness ?? "load",
-              input.timeoutMs ?? request.timeoutMs,
+              waitBudgetMs(input.timeoutMs, request.timeoutMs),
             );
             return await currentStatus(threadRef, ready.tabId);
           }
@@ -530,7 +538,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
                 ready.tabId,
                 ready.runtimeTabId,
                 setting,
-                input.timeoutMs ?? request.timeoutMs,
+                waitBudgetMs(input.timeoutMs, request.timeoutMs),
                 {
                   requestId: request.requestId,
                   operation: request.operation,

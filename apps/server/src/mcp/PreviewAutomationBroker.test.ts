@@ -7,6 +7,7 @@ import {
   PreviewAutomationMalformedResponseError,
   PreviewAutomationNoAvailableHostError,
   PreviewAutomationTargetNotEditableError,
+  PreviewAutomationTimeoutError,
   PreviewTabId,
   ProviderInstanceId,
   ThreadId,
@@ -14,11 +15,13 @@ import {
   type PreviewAutomationRequest,
   type PreviewAutomationStreamEvent,
 } from "@t3tools/contracts";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 
@@ -1039,6 +1042,109 @@ it.effect("accepts responses only from the host that received the request", () =
 
       const result = yield* broker.invoke<string>({ scope, operation: "status", input: {} });
       expect(result).toBe("owner");
+    }),
+  ),
+);
+
+it.effect("routes a wait budget that leaves the host room to report a failure", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const requests = requestsFrom(yield* broker.connect(makeHost()));
+      const routedRequests: RoutedRequest[] = [];
+      yield* Stream.runForEach(requests, (request) => {
+        routedRequests.push(request);
+        return broker.respond({
+          clientId: "client-1",
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: true,
+          result: "done",
+        });
+      }).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      yield* broker.invoke<string>({ scope, operation: "snapshot", input: {}, timeoutMs: 15_000 });
+      yield* broker.invoke<string>({ scope, operation: "snapshot", input: {}, timeoutMs: 200 });
+
+      expect(routedRequests.map((request) => request.timeoutMs)).toEqual([14_000, 180]);
+    }),
+  ),
+);
+
+it.effect("reports why a host gave up when it spends its whole wait budget", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const requests = requestsFrom(yield* broker.connect(makeHost()));
+      const routed = yield* Deferred.make<RoutedRequest>();
+      yield* Stream.runForEach(requests, (request) => Deferred.succeed(routed, request)).pipe(
+        Effect.forkScoped,
+      );
+
+      const pending = yield* broker
+        .invoke<void>({ scope, operation: "snapshot", input: {}, timeoutMs: 15_000 })
+        .pipe(Effect.flip, Effect.forkScoped);
+      const request = yield* Deferred.await(routed);
+
+      // The host waits out every millisecond it was given before it reports the
+      // overlay it never got. That answer has to beat the abandon deadline.
+      yield* TestClock.adjust(Duration.millis(request.timeoutMs));
+      yield* broker.respond({
+        clientId: "client-1",
+        connectionId: request.connectionId,
+        requestId: request.requestId,
+        ok: false,
+        error: {
+          _tag: "PreviewAutomationTimeoutError",
+          message: `Preview webview for request ${request.requestId} did not register within ${request.timeoutMs}ms.`,
+          detail: { timeoutStage: "overlay" },
+        },
+      });
+
+      const error = yield* Fiber.join(pending);
+      expect(error).toBeInstanceOf(PreviewAutomationTimeoutError);
+      expect(error).toMatchObject({
+        operation: "snapshot",
+        requestId: "preview-0",
+        timeoutMs: 15_000,
+        timeoutStage: "overlay",
+        remoteTag: "PreviewAutomationTimeoutError",
+      });
+      expect(error.message).toBe(
+        "Preview automation snapshot timed out after 15000ms waiting for the preview overlay to become available.",
+      );
+    }),
+  ).pipe(Effect.provide(TestClock.layer())),
+);
+
+it.effect("ignores a timeout stage the host did not send", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const requests = requestsFrom(yield* broker.connect(makeHost()));
+      yield* Stream.runForEach(requests, (request) =>
+        broker.respond({
+          clientId: "client-1",
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: false,
+          error: {
+            _tag: "PreviewAutomationTimeoutError",
+            message: "remote timeout",
+            detail: { timeoutStage: "not-a-stage" },
+          },
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      const error = yield* broker
+        .invoke<void>({ scope, operation: "evaluate", input: {}, timeoutMs: 15_000 })
+        .pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(PreviewAutomationTimeoutError);
+      expect("timeoutStage" in error).toBe(false);
+      expect(error.message).toBe("Preview automation evaluate timed out after 15000ms.");
     }),
   ),
 );

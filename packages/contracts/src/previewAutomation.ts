@@ -726,16 +726,33 @@ export class PreviewAutomationTabNotFoundError extends Schema.TaggedErrorClass<P
   }
 }
 
+/**
+ * What the host was waiting for when it ran out of budget. Hosts collapse their
+ * own timeout errors onto the wire's timeout tag, so this closed vocabulary is
+ * what carries the reason back to the caller without echoing remote text.
+ */
+export const PreviewAutomationTimeoutStage = Schema.Literals(["overlay", "navigation", "viewport"]);
+export type PreviewAutomationTimeoutStage = typeof PreviewAutomationTimeoutStage.Type;
+
+const previewAutomationTimeoutStageSummary = {
+  overlay: "waiting for the preview overlay to become available",
+  navigation: "waiting for the page to finish loading",
+  viewport: "waiting for the viewport to render at the requested size",
+} as const satisfies Record<PreviewAutomationTimeoutStage, string>;
+
 export class PreviewAutomationTimeoutError extends Schema.TaggedErrorClass<PreviewAutomationTimeoutError>()(
   "PreviewAutomationTimeoutError",
   {
     ...PreviewAutomationRequestErrorFields,
     ...PreviewAutomationOptionalRemoteDiagnosticFields,
+    timeoutStage: Schema.optional(PreviewAutomationTimeoutStage),
   },
 ) {
   override get message(): string {
-    const summary = `Preview automation ${this.operation} timed out after ${this.timeoutMs}ms.`;
-    return summary;
+    const summary = `Preview automation ${this.operation} timed out after ${this.timeoutMs}ms`;
+    return this.timeoutStage === undefined
+      ? `${summary}.`
+      : `${summary} ${previewAutomationTimeoutStageSummary[this.timeoutStage]}.`;
   }
 }
 

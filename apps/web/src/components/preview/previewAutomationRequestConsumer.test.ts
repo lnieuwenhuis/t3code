@@ -10,6 +10,7 @@ import { AsyncResult, Atom, AtomRegistry } from "effect/unstable/reactivity";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  PreviewAutomationOverlayTimeoutError,
   PreviewAutomationRecordingNotActiveError,
   PreviewAutomationTargetUnavailableError,
   PreviewAutomationViewportTimeoutError,
@@ -265,6 +266,28 @@ describe("previewAutomationRequestConsumer", () => {
     ).toMatchObject({
       _tag: "PreviewAutomationExecutionError",
       detail: { tabId: null },
+    });
+  });
+
+  it("names the stage an overlay timeout gave up in", () => {
+    const error = new PreviewAutomationOverlayTimeoutError({
+      requestId: "request-snapshot",
+      environmentId,
+      threadId,
+      timeoutMs: 14_000,
+    });
+
+    expect(
+      serializePreviewAutomationError(error, {
+        requestId: "request-snapshot",
+        operation: "snapshot",
+        environmentId,
+        threadId,
+        tabId,
+      }),
+    ).toMatchObject({
+      _tag: "PreviewAutomationTimeoutError",
+      detail: { timeoutStage: "overlay", timeoutMs: 14_000 },
     });
   });
 

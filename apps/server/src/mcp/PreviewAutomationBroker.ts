@@ -12,6 +12,7 @@ import {
   PreviewAutomationTabNotFoundError,
   PreviewAutomationTargetNotEditableError,
   PreviewAutomationTimeoutError,
+  PreviewAutomationTimeoutStage,
   PreviewAutomationUnsupportedClientError,
   PreviewTabId,
   type PreviewAutomationError,
@@ -166,6 +167,31 @@ const supportsOperation = (
   operation: PreviewAutomationOperation,
 ): boolean => connection.supportedOperations.has(operation);
 
+/**
+ * Headroom the broker keeps between the host's budget and its own deadline, so
+ * a host that gives up still has time to say why over the wire. A tenth of the
+ * request keeps small budgets usable and the cap keeps large ones from wasting
+ * seconds of a wait that could still succeed.
+ */
+const HOST_RESPONSE_MARGIN_MS = 1_000;
+
+/**
+ * The wait budget handed to the host. It stays strictly below the broker's
+ * abandon deadline: sharing one deadline made every host-side readiness failure
+ * lose the race to `PreviewAutomationTimeoutError`, so the specific reason was
+ * reported into a request nobody was waiting on any more.
+ */
+const hostResponseBudgetMs = (timeoutMs: number): number =>
+  Math.max(1, timeoutMs - Math.min(HOST_RESPONSE_MARGIN_MS, Math.ceil(timeoutMs / 10)));
+
+const isPreviewAutomationTimeoutStage = Schema.is(PreviewAutomationTimeoutStage);
+
+const remoteTimeoutStage = (detail: unknown): PreviewAutomationTimeoutStage | undefined => {
+  if (typeof detail !== "object" || detail === null || !("timeoutStage" in detail))
+    return undefined;
+  return isPreviewAutomationTimeoutStage(detail.timeoutStage) ? detail.timeoutStage : undefined;
+};
+
 type RemoteDetailKind = "null" | "array" | "object" | "string" | "number" | "boolean";
 
 function remoteDetailKind(detail: unknown): RemoteDetailKind {
@@ -209,11 +235,14 @@ const classifyResponseError = (
         ...context,
         ...remoteDiagnostics,
       });
-    case "PreviewAutomationTimeoutError":
+    case "PreviewAutomationTimeoutError": {
+      const timeoutStage = remoteTimeoutStage(error.detail);
       return new PreviewAutomationTimeoutError({
         ...context,
         ...remoteDiagnostics,
+        ...(timeoutStage === undefined ? {} : { timeoutStage }),
       });
+    }
     case "PreviewAutomationControlInterruptedError":
       return new PreviewAutomationControlInterruptedError({
         ...context,
@@ -534,7 +563,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
           tabIdExplicit: input.tabId !== undefined,
           operation: input.operation,
           input: input.input,
-          timeoutMs,
+          timeoutMs: hostResponseBudgetMs(timeoutMs),
         },
       });
       if (!offered) {

@@ -31,6 +31,10 @@ export class PreviewAutomationOverlayTimeoutError extends Schema.TaggedErrorClas
     return "PreviewAutomationTimeoutError" as const;
   }
 
+  get timeoutStage() {
+    return "overlay" as const;
+  }
+
   override get message(): string {
     return `Preview webview for request ${this.requestId} on environment ${this.environmentId} thread ${this.threadId} did not register within ${this.timeoutMs}ms.`;
   }
@@ -51,6 +55,10 @@ export class PreviewAutomationNavigationTimeoutError extends Schema.TaggedErrorC
     return "PreviewAutomationTimeoutError" as const;
   }
 
+  get timeoutStage() {
+    return "navigation" as const;
+  }
+
   override get message(): string {
     return `Preview navigation for request ${this.requestId} on environment ${this.environmentId} thread ${this.threadId} tab ${this.tabId} did not reach ${this.readiness} readiness within ${this.timeoutMs}ms.`;
   }
@@ -68,6 +76,10 @@ export class PreviewAutomationViewportTimeoutError extends Schema.TaggedErrorCla
 ) {
   get responseTag() {
     return "PreviewAutomationTimeoutError" as const;
+  }
+
+  get timeoutStage() {
+    return "viewport" as const;
   }
 
   override get message(): string {
@@ -218,15 +230,27 @@ export type PreviewAutomationHostError = typeof PreviewAutomationHostError.Type;
 
 export const isPreviewAutomationHostError = Schema.is(PreviewAutomationHostError);
 
+/**
+ * Timeouts all collapse onto the wire's single timeout tag, so the stage a host
+ * gave up in rides along in the detail. It is what lets the server tell "the
+ * overlay never registered" apart from a generic expiry.
+ */
 export function serializePreviewAutomationHostError(
   error: PreviewAutomationHostError,
 ): NonNullable<PreviewAutomationResponse["error"]> {
-  const detail = Object.fromEntries(
-    Object.entries(error).filter(
-      ([key]) =>
-        key !== "_tag" && key !== "cause" && key !== "name" && key !== "message" && key !== "stack",
+  const detail = {
+    ...Object.fromEntries(
+      Object.entries(error).filter(
+        ([key]) =>
+          key !== "_tag" &&
+          key !== "cause" &&
+          key !== "name" &&
+          key !== "message" &&
+          key !== "stack",
+      ),
     ),
-  );
+    ...("timeoutStage" in error ? { timeoutStage: error.timeoutStage } : {}),
+  };
   return {
     _tag: error.responseTag,
     message: error.message,
