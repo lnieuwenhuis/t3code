@@ -179,10 +179,14 @@ const HOST_RESPONSE_MARGIN_MS = 1_000;
  * The wait budget handed to the host. It stays strictly below the broker's
  * abandon deadline: sharing one deadline made every host-side readiness failure
  * lose the race to `PreviewAutomationTimeoutError`, so the specific reason was
- * reported into a request nobody was waiting on any more.
+ * reported into a request nobody was waiting on any more. The wire schema
+ * requires a positive budget, so the broker deadline is clamped to 2ms
+ * (`MINIMUM_BROKER_TIMEOUT_MS`) instead of ever putting 0 on the wire.
  */
+const MINIMUM_BROKER_TIMEOUT_MS = 2;
+
 const hostResponseBudgetMs = (timeoutMs: number): number =>
-  Math.max(0, timeoutMs - Math.min(HOST_RESPONSE_MARGIN_MS, Math.ceil(timeoutMs / 10)));
+  Math.max(1, timeoutMs - Math.min(HOST_RESPONSE_MARGIN_MS, Math.ceil(timeoutMs / 10)));
 
 const isPreviewAutomationTimeoutStage = Schema.is(PreviewAutomationTimeoutStage);
 
@@ -455,7 +459,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
   const invoke = Effect.fn("PreviewAutomationBroker.invoke")(function* <A = unknown>(
     input: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0],
   ): Effect.fn.Return<A, PreviewAutomationError> {
-    const timeoutMs = input.timeoutMs ?? 15_000;
+    const timeoutMs = Math.max(MINIMUM_BROKER_TIMEOUT_MS, input.timeoutMs ?? 15_000);
     const deferred = yield* Deferred.make<unknown, PreviewAutomationError>();
     const route = yield* SynchronizedRef.modify(state, (current) => {
       const assignments = new Map(
