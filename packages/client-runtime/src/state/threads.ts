@@ -1,6 +1,7 @@
 import {
   ORCHESTRATION_WS_METHODS,
   type EnvironmentId as EnvironmentIdType,
+  type OrchestrationEvent,
   type OrchestrationThread,
   type OrchestrationThreadDetailPage,
   type OrchestrationThreadDetailSnapshot,
@@ -48,6 +49,15 @@ function statusWithoutLiveData(data: Option.Option<OrchestrationThread>): Enviro
  */
 export const INITIAL_THREAD_USER_TURN_LIMIT = 10;
 export const OLDER_THREAD_PAGE_USER_TURN_LIMIT = 20;
+
+/**
+ * How many stream items may fold into one published thread state. Batches
+ * form adaptively (see the subscription's `Stream.buffer`), so this cap only
+ * matters for a large backlog: each slice publishes once and yields, keeping
+ * the UI repainting while thousands of replayed events drain instead of
+ * folding them in one long uninterruptible pass.
+ */
+const MAX_STREAM_ITEMS_PER_PUBLISH = 128;
 
 function pageStateFromSnapshot(
   page: OrchestrationThreadDetailPage | undefined,
@@ -313,21 +323,21 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     );
   });
 
-  // Body of applyItem, running under applyLock.
-  const applyItemLocked = Effect.fn("EnvironmentThreadState.applyItemLocked")(function* (
-    item: OrchestrationThreadStreamItem,
-  ) {
-    if (item.kind === "synchronized") {
-      yield* Ref.set(awaitingCompletion, false);
-      yield* SubscriptionRef.update(state, (current) =>
-        Option.isSome(current.data) && current.status !== "deleted"
-          ? { ...current, status: "live" as const, error: Option.none() }
-          : current,
-      );
-      return;
-    }
+  // Body of applyItems for control items, running under applyLock.
+  const applyControlItemLocked = Effect.fn("EnvironmentThreadState.applyControlItemLocked")(
+    function* (
+      item: Extract<OrchestrationThreadStreamItem, { kind: "synchronized" | "snapshot" }>,
+    ) {
+      if (item.kind === "synchronized") {
+        yield* Ref.set(awaitingCompletion, false);
+        yield* SubscriptionRef.update(state, (current) =>
+          Option.isSome(current.data) && current.status !== "deleted"
+            ? { ...current, status: "live" as const, error: Option.none() }
+            : current,
+        );
+        return;
+      }
 
-    if (item.kind === "snapshot") {
       // A fresh snapshot replaces all loaded history, including older
       // pages: a turn reverted while disconnected would otherwise survive
       // in the preserved history with no event left to remove it. The
@@ -335,40 +345,83 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       yield* Ref.update(historyEpoch, (epoch) => epoch + 1);
       yield* SubscriptionRef.set(lastSequence, item.snapshot.snapshotSequence);
       yield* setThread(item.snapshot.thread, pageStateFromSnapshot(item.snapshot.page));
-      return;
-    }
+    },
+  );
 
-    const sequence = yield* SubscriptionRef.get(lastSequence);
-    if (item.event.sequence <= sequence) {
-      return;
-    }
-    yield* SubscriptionRef.set(lastSequence, item.event.sequence);
-
+  // Folds a run of consecutive events through the pure reducer and publishes
+  // at most one state update for the whole run, running under applyLock. A
+  // backlogged stream (very active turn, replay after reconnect) then costs
+  // one React commit per batch instead of one per event (#4596).
+  const applyEventRunLocked = Effect.fn("EnvironmentThreadState.applyEventRunLocked")(function* (
+    events: ReadonlyArray<OrchestrationEvent>,
+  ) {
+    const initialSequence = yield* SubscriptionRef.get(lastSequence);
+    let sequence = initialSequence;
     const current = yield* SubscriptionRef.get(state);
-    if (Option.isNone(current.data)) {
-      if (item.event.type === "thread.deleted") {
-        yield* setDeleted();
+    let thread = Option.getOrNull(current.data);
+    let updated = false;
+    for (const event of events) {
+      if (event.sequence <= sequence) {
+        continue;
       }
-      return;
+      sequence = event.sequence;
+      if (thread === null) {
+        if (event.type === "thread.deleted") {
+          yield* SubscriptionRef.set(lastSequence, sequence);
+          yield* setDeleted();
+        }
+        continue;
+      }
+      if (event.type === "thread.reverted") {
+        // A revert rewrites loaded history (whole turns disappear), so an
+        // older-page fetch in flight may straddle the removed range; the epoch
+        // bump discards it. The stored page cursor stays valid: cursors are an
+        // (anchor, turnId) keyset derived from event content, which survives
+        // the revert projector's row rewrite, so no refresh is needed — the
+        // revert reducer's turn filtering fully handles loaded history.
+        yield* Ref.update(historyEpoch, (epoch) => epoch + 1);
+      }
+      const result = applyThreadDetailEvent(thread, event);
+      if (result.kind === "updated") {
+        thread = result.thread;
+        updated = true;
+      } else if (result.kind === "deleted") {
+        yield* SubscriptionRef.set(lastSequence, sequence);
+        yield* setDeleted();
+        thread = null;
+        updated = false;
+      }
     }
-    if (item.event.type === "thread.reverted") {
-      // A revert rewrites loaded history (whole turns disappear), so an
-      // older-page fetch in flight may straddle the removed range; the epoch
-      // bump discards it. The stored page cursor stays valid: cursors are an
-      // (anchor, turnId) keyset derived from event content, which survives
-      // the revert projector's row rewrite, so no refresh is needed — the
-      // revert reducer's turn filtering fully handles loaded history.
-      yield* Ref.update(historyEpoch, (epoch) => epoch + 1);
+    if (sequence !== initialSequence) {
+      yield* SubscriptionRef.set(lastSequence, sequence);
     }
-    const result = applyThreadDetailEvent(current.data.value, item.event);
-    if (result.kind === "updated") {
-      yield* setThread(result.thread, "keep");
-    } else if (result.kind === "deleted") {
-      yield* setDeleted();
+    if (updated && thread !== null) {
+      yield* setThread(thread, "keep");
     }
-    // The event may have advanced the live state past a parked page's
+    // The events may have advanced the live state past a parked page's
     // watermark; merge it as soon as that happens.
     yield* tryMergePendingOlderPage();
+  });
+
+  // Body of applyItems for one slice, running under applyLock.
+  const applyItemsLocked = Effect.fn("EnvironmentThreadState.applyItemsLocked")(function* (
+    items: ReadonlyArray<OrchestrationThreadStreamItem>,
+  ) {
+    let events: Array<OrchestrationEvent> = [];
+    for (const item of items) {
+      if (item.kind === "event") {
+        events.push(item.event);
+        continue;
+      }
+      if (events.length > 0) {
+        yield* applyEventRunLocked(events);
+        events = [];
+      }
+      yield* applyControlItemLocked(item);
+    }
+    if (events.length > 0) {
+      yield* applyEventRunLocked(events);
+    }
   });
 
   // Merges a parked older page once the live state has caught up to the
@@ -399,11 +452,26 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     },
   );
 
-  const applyItem = Effect.fn("EnvironmentThreadState.applyItem")(function* (
-    item: OrchestrationThreadStreamItem,
+  // Applies a batch of stream items. Batches form adaptively downstream of
+  // the subscription's Stream.buffer: whatever arrived while the previous
+  // batch applied folds into the next one, so publication count tracks how
+  // fast the client applies instead of how fast the server emits. Slices cap
+  // the fold per publication and release the lock between slices so an
+  // older-page load can interleave with a large replay backlog.
+  const applyItems = Effect.fn("EnvironmentThreadState.applyItems")(function* (
+    items: ReadonlyArray<OrchestrationThreadStreamItem>,
   ) {
-    yield* applyLock.withPermits(1)(applyItemLocked(item));
+    for (let start = 0; start < items.length; start += MAX_STREAM_ITEMS_PER_PUBLISH) {
+      if (start > 0) {
+        yield* Effect.yieldNow;
+      }
+      yield* applyLock.withPermits(1)(
+        applyItemsLocked(items.slice(start, start + MAX_STREAM_ITEMS_PER_PUBLISH)),
+      );
+    }
   });
+
+  const applyItem = (item: OrchestrationThreadStreamItem) => applyItems([item]);
 
   // Merges an older disjoint page below the currently loaded window. All four
   // windowed collections prepend; identity dedupe guards the (server-bug or
@@ -641,7 +709,15 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         retryExpectedFailureAfter: "250 millis",
         resubscribe: foregroundResubscriptions,
       },
-    ).pipe(Stream.runForEach(applyItem)),
+    ).pipe(
+      // Decouple delivery from application: the buffer's consumer receives
+      // whatever accumulated while the previous batch applied — one item when
+      // the client keeps up, the whole backlog when it does not — adding no
+      // latency to either case.
+      Stream.buffer({ capacity: "unbounded" }),
+      Stream.chunks,
+      Stream.runForEach(applyItems),
+    ),
   );
 
   // Expose loadOlderTurns to UI actions through the request registry.

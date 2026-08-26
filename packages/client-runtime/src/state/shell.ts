@@ -135,31 +135,29 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       ),
     );
 
-  const applyItem = Effect.fn("EnvironmentShellState.applyItem")(function* (
-    item: OrchestrationShellStreamItem,
+  // Folds a run of consecutive snapshot/event items into at most one
+  // published state, so a busy environment costs one React commit per batch
+  // instead of one per shell event.
+  const applyItemRun = Effect.fn("EnvironmentShellState.applyItemRun")(function* (
+    run: ReadonlyArray<Exclude<OrchestrationShellStreamItem, { kind: "synchronized" }>>,
   ) {
-    if (item.kind === "synchronized") {
-      yield* Ref.set(awaitingCompletion, false);
-      yield* SubscriptionRef.update(state, (current) =>
-        Option.isSome(current.snapshot)
-          ? { ...current, status: "live" as const, error: Option.none() }
-          : current,
-      );
-      return;
-    }
-
     const current = yield* SubscriptionRef.get(state);
-    const nextSnapshot =
-      item.kind === "snapshot"
-        ? item.snapshot
-        : Option.match(current.snapshot, {
-            onNone: () => null,
-            onSome: (snapshot) =>
-              item.sequence > snapshot.snapshotSequence
-                ? applyShellStreamEvent(snapshot, item)
-                : snapshot,
-          });
-    if (nextSnapshot === null) {
+    let nextSnapshot = Option.getOrNull(current.snapshot);
+    let receivedSnapshot = false;
+    let applied = false;
+    for (const item of run) {
+      if (item.kind === "snapshot") {
+        nextSnapshot = item.snapshot;
+        receivedSnapshot = true;
+        applied = true;
+      } else if (nextSnapshot !== null) {
+        if (item.sequence > nextSnapshot.snapshotSequence) {
+          nextSnapshot = applyShellStreamEvent(nextSnapshot, item);
+        }
+        applied = true;
+      }
+    }
+    if (!applied || nextSnapshot === null) {
       return;
     }
 
@@ -169,7 +167,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       status: waiting ? "synchronizing" : "live",
       error: Option.none(),
     });
-    if (item.kind === "snapshot") {
+    if (receivedSnapshot) {
       const session = yield* Ref.get(activeSubscriptionSession);
       if (session !== null) {
         yield* Ref.set(lastAuthoritativeSession, session);
@@ -177,6 +175,37 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     }
     yield* Queue.offer(persistence, nextSnapshot);
   });
+
+  // Applies a batch of stream items. Batches form adaptively downstream of
+  // the subscription's Stream.buffer: whatever accumulated while the
+  // previous batch applied folds into the next one, so publication count
+  // tracks how fast the client applies instead of how fast the server emits.
+  const applyItems = Effect.fn("EnvironmentShellState.applyItems")(function* (
+    items: ReadonlyArray<OrchestrationShellStreamItem>,
+  ) {
+    let run: Array<Exclude<OrchestrationShellStreamItem, { kind: "synchronized" }>> = [];
+    for (const item of items) {
+      if (item.kind !== "synchronized") {
+        run.push(item);
+        continue;
+      }
+      if (run.length > 0) {
+        yield* applyItemRun(run);
+        run = [];
+      }
+      yield* Ref.set(awaitingCompletion, false);
+      yield* SubscriptionRef.update(state, (current) =>
+        Option.isSome(current.snapshot)
+          ? { ...current, status: "live" as const, error: Option.none() }
+          : current,
+      );
+    }
+    if (run.length > 0) {
+      yield* applyItemRun(run);
+    }
+  });
+
+  const applyItem = (item: OrchestrationShellStreamItem) => applyItems([item]);
 
   const foregroundResubscriptions = Option.match(wakeups, {
     onNone: () => Stream.never,
@@ -250,7 +279,15 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         retryExpectedFailureAfter: "250 millis",
         resubscribe: foregroundResubscriptions,
       },
-    ).pipe(Stream.runForEach(applyItem)),
+    ).pipe(
+      // Decouple delivery from application: the buffer's consumer receives
+      // whatever accumulated while the previous batch applied — one item when
+      // the client keeps up, the whole backlog when it does not — adding no
+      // latency to either case.
+      Stream.buffer({ capacity: "unbounded" }),
+      Stream.chunks,
+      Stream.runForEach(applyItems),
+    ),
   );
   yield* SubscriptionRef.changes(supervisor.state).pipe(
     Stream.runForEach((connectionState) => {
