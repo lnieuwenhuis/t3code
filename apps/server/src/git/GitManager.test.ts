@@ -3773,6 +3773,46 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect(
+    "surfaces the unresolvable cross-repository head explanation on hosts with no head ref",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        const remoteDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+        yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+
+        // A cross-repository head on a host that publishes no change-request ref, where the
+        // repository it was opened from cannot be resolved either: nothing names the head.
+        const { manager } = yield* makeManager({
+          providerKind: "bitbucket",
+          ghScenario: {
+            pullRequest: {
+              number: 613,
+              title: "Cross-repository Bitbucket PR",
+              url: "https://bitbucket.org/workspace/repo/pull-requests/613",
+              baseRefName: "main",
+              headRefName: "feature/unresolvable-head",
+              state: "open",
+              isCrossRepository: true,
+            },
+          },
+        });
+
+        const error = yield* preparePullRequestThread(manager, {
+          cwd: repoDir,
+          reference: "613",
+          mode: "worktree",
+        }).pipe(Effect.flip);
+
+        if (error._tag !== "GitManagerError") {
+          return yield* Effect.die(error);
+        }
+        expect(error.message).toContain("This host publishes no ref for the change request head");
+      }),
+  );
+
   it.effect("launches setup when creating a new PR worktree", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");

@@ -118,6 +118,7 @@ const PR_LOOKUP_FAILURE_BASE_TTL = Duration.seconds(20);
 const PR_LOOKUP_FAILURE_MAX_TTL = Duration.minutes(15);
 const PR_LOOKUP_CACHE_CAPACITY = 2_048;
 const isSourceControlProviderError = Schema.is(SourceControlProviderError);
+const isGitManagerError = Schema.is(GitManagerError);
 
 /**
  * How long a failed PR lookup is cached, given the number of consecutive
@@ -861,8 +862,12 @@ export const make = Effect.gen(function* () {
       Effect.catch((primaryCause) =>
         headRef === null
           ? // Nothing to fall back on where the host publishes no change-request ref: the
-            // primary attempt already read the only thing that names the head there.
-            Effect.fail(materializationError(primaryCause))
+            // primary attempt already read the only thing that names the head there. A
+            // GitManagerError here is the deliberate explanation of why the head cannot be
+            // resolved; wrapping it would bury that message behind the generic one.
+            Effect.fail(
+              isGitManagerError(primaryCause) ? primaryCause : materializationError(primaryCause),
+            )
           : gitCore
               .fetchPullRequestBranch({ cwd, headRef, branch: localBranch })
               .pipe(
