@@ -7,6 +7,8 @@ import {
 import { type EnvironmentThreadShell, scopeThreadShell } from "@t3tools/client-runtime/state/shell";
 import { executeAtomQuery } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId } from "@t3tools/contracts";
+import * as Option from "effect/Option";
+import { AsyncResult } from "effect/unstable/reactivity";
 import { useCallback, useMemo } from "react";
 
 import { orchestrationEnvironment } from "../state/orchestration";
@@ -30,50 +32,30 @@ export function refreshArchivedThreadsForEnvironment(environmentId: EnvironmentI
 
 const ARCHIVED_FETCH_TIMEOUT_MS = 5_000;
 
-/** Resolves to `fallback` if `promise` has not settled within `timeoutMs`.
-    Environment queries never settle while the environment is connecting or
-    in backoff, so callers that must not hang wait a bounded time instead. */
-export function settleWithin<T, F>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  fallback: F,
-): Promise<T | F> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(fallback), timeoutMs);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      () => {
-        clearTimeout(timer);
-        resolve(fallback);
-      },
-    );
-  });
-}
-
 /** One-shot fetch of an environment's archived thread shells. The archived
     snapshot atom is only mounted while Settings → Archived is open, so a
-    synchronous read can miss; this awaits a fresh result instead, bounded so a
-    disconnected environment cannot hang the caller. Returns null on failure or
-    timeout so callers can fail soft. */
+    synchronous read can miss; this asks for a fresh result, bounded so a
+    reconnecting environment cannot hang the caller, and falls back to the
+    last snapshot the atom already holds. Returns null when neither exists so
+    callers can fail soft. */
 export async function fetchArchivedThreadShells(
   environmentId: EnvironmentId,
 ): Promise<ReadonlyArray<EnvironmentThreadShell> | null> {
-  const result = await settleWithin(
-    executeAtomQuery(appAtomRegistry, archivedSnapshotAtom(environmentId), {
-      refresh: true,
-      reportDefect: false,
-      reportFailure: false,
-    }),
-    ARCHIVED_FETCH_TIMEOUT_MS,
-    null,
-  );
-  if (result === null || result._tag !== "Success") {
-    return null;
-  }
-  return result.value.threads.map((thread) => scopeThreadShell(environmentId, thread));
+  const atom = archivedSnapshotAtom(environmentId);
+  const result = await executeAtomQuery(appAtomRegistry, atom, {
+    refresh: true,
+    timeoutMs: ARCHIVED_FETCH_TIMEOUT_MS,
+    reportDefect: false,
+    reportFailure: false,
+  });
+  const snapshot =
+    result._tag === "Success"
+      ? Option.some(result.value)
+      : AsyncResult.value(appAtomRegistry.get(atom));
+  return Option.match(snapshot, {
+    onNone: () => null,
+    onSome: (value) => value.threads.map((thread) => scopeThreadShell(environmentId, thread)),
+  });
 }
 
 export function useArchivedThreadSnapshots(environmentIds: ReadonlyArray<EnvironmentId>): {
