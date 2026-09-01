@@ -33,7 +33,8 @@ server starts: production and explicitly configured homes use
 `/custom/path/userdata/...` with `--home-dir /custom/path`), a linked worktree dev run uses
 `<worktree>/.t3/userdata/logs/server.trace.ndjson`, and an implicit dev run outside a linked
 worktree uses `~/.t3/dev/logs/server.trace.ndjson`. Set `T3CODE_TRACE_ENABLED=false` to disable
-local trace export; no file or directory is created in that case.
+local trace export; no trace file is written in that case. The standard logs directory still
+exists because the server log and provider logs live there too.
 
 Important fields common to both record types:
 
