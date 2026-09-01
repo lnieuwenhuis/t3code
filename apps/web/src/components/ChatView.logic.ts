@@ -245,6 +245,73 @@ export function buildThreadTurnInterruptInput(thread: Pick<Thread, "id" | "sessi
   };
 }
 
+/** The pending question seen on the previous render and the draft target of
+ * the thread that showed it, so a disappearance can be attributed. */
+export interface PendingUserInputRequestSnapshot<TDraftTarget> {
+  requestId: string;
+  draftTarget: TDraftTarget;
+}
+
+/**
+ * While a question is pending, the composer routes typed text into that
+ * question's custom answer instead of the persisted draft. The question can
+ * disappear for reasons other than being answered (Stop, provider abort,
+ * teardown), which would silently discard the text (issue #8963). Returns the
+ * text to rescue into the composer draft, or null when the request did not
+ * change, the answer was submitted, the thread on screen has changed (an
+ * off-screen cancellation is left alone rather than risk the wrong draft), or
+ * there is nothing non-blank to keep.
+ */
+export function resolveCancelledPendingUserInputSnapshot<TDraftTarget>(input: {
+  previous: PendingUserInputRequestSnapshot<TDraftTarget> | null;
+  nextRequestId: string | null;
+  currentDraftTarget: TDraftTarget;
+  answerForPrevious: string | null | undefined;
+  wasSubmitted: boolean;
+}): string | null {
+  const { previous, nextRequestId, currentDraftTarget, answerForPrevious, wasSubmitted } = input;
+  if (!previous) {
+    return null;
+  }
+  if (previous.requestId === nextRequestId) {
+    return null;
+  }
+  if (wasSubmitted) {
+    return null;
+  }
+  if (previous.draftTarget !== currentDraftTarget) {
+    return null;
+  }
+  if (!answerForPrevious || answerForPrevious.trim().length === 0) {
+    return null;
+  }
+  return answerForPrevious;
+}
+
+/**
+ * Merges a rescued pending-question answer into a thread's composer draft
+ * prompt. The draft store is untouched while a question is pending, so it
+ * can still hold older unsent text — a blank draft is replaced outright,
+ * but non-blank text is preserved and the rescued answer is appended after
+ * a blank line rather than clobbering it. Returns `null` when there is
+ * nothing worth persisting (blank answer).
+ */
+export function mergeComposerDraftPromptWithPendingAnswer(
+  existingDraftPrompt: string,
+  pendingCustomAnswer: string,
+): string | null {
+  if (pendingCustomAnswer.trim().length === 0) {
+    return null;
+  }
+  if (existingDraftPrompt.trim().length === 0) {
+    return pendingCustomAnswer;
+  }
+  if (existingDraftPrompt === pendingCustomAnswer) {
+    return existingDraftPrompt;
+  }
+  return `${existingDraftPrompt}\n\n${pendingCustomAnswer}`;
+}
+
 export function reconcileMountedTerminalThreadIds(input: {
   currentThreadIds: ReadonlyArray<string>;
   openThreadIds: ReadonlyArray<string>;

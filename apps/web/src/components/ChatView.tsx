@@ -367,8 +367,11 @@ import {
   readFileAsDataUrl,
   loadVideoPreviewUrl,
   isVideoPreviewRequestCurrent,
+  mergeComposerDraftPromptWithPendingAnswer,
+  type PendingUserInputRequestSnapshot,
   reconcileMountedTerminalThreadIds,
   resolveBackgroundDraftWorkspaceOptions,
+  resolveCancelledPendingUserInputSnapshot,
   resolveDraftHeroState,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
@@ -1517,6 +1520,16 @@ function ChatViewContent(props: ChatViewProps) {
   >({});
   const [pendingUserInputQuestionIndexByRequestId, setPendingUserInputQuestionIndexByRequestId] =
     useState<Record<string, number>>({});
+  // The pending question seen on the previous render; see the rescue effect
+  // below.
+  const prevPendingUserInputRef = useRef<PendingUserInputRequestSnapshot<
+    ScopedThreadRef | DraftId
+  > | null>(null);
+  // Request ids with an answer submitted via onRespondToUserInput. A submitted
+  // question also disappears from pendingUserInputs, but that's the answer
+  // being sent, not the question being cancelled, so the effect below must
+  // not rescue its text. Unmarked when the submit fails.
+  const submittedPendingUserInputRequestIdsRef = useRef<Set<string>>(new Set());
   const shouldUseRightPanelSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   const [terminalFocusRequestId, setTerminalFocusRequestId] = useState(0);
   const [pullRequestDialogState, setPullRequestDialogState] =
@@ -2419,6 +2432,55 @@ function ChatViewContent(props: ChatViewProps) {
         : null,
     [activePendingDraftAnswers, activePendingQuestionIndex, activePendingUserInput],
   );
+  // Rescues a pending question's typed custom answer into the composer draft
+  // when the question disappears without being answered (issue #8963).
+  // `prevPendingUserInputRef` is written only here, so "previous" is always
+  // the state before this transition.
+  useEffect(() => {
+    const nextRequestId = activePendingUserInput?.requestId ?? null;
+    const previous = prevPendingUserInputRef.current;
+    if (previous && previous.requestId !== nextRequestId) {
+      const wasSubmitted = submittedPendingUserInputRequestIdsRef.current.has(previous.requestId);
+      submittedPendingUserInputRequestIdsRef.current.delete(previous.requestId);
+      // Answers by request id are never pruned, so the outgoing request's
+      // typed text is still readable here.
+      let answerForPrevious: string | null = null;
+      for (const draft of Object.values(
+        pendingUserInputAnswersByRequestId[previous.requestId] ?? {},
+      )) {
+        if (draft.customAnswer && draft.customAnswer.trim().length > 0) {
+          answerForPrevious = draft.customAnswer;
+          break;
+        }
+      }
+      const textToPersist = resolveCancelledPendingUserInputSnapshot({
+        previous,
+        nextRequestId,
+        currentDraftTarget: composerDraftTarget,
+        answerForPrevious,
+        wasSubmitted,
+      });
+      if (textToPersist !== null) {
+        const existingDraftPrompt =
+          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.prompt ?? "";
+        const nextDraftPrompt = mergeComposerDraftPromptWithPendingAnswer(
+          existingDraftPrompt,
+          textToPersist,
+        );
+        if (nextDraftPrompt !== null) {
+          setComposerDraftPrompt(composerDraftTarget, nextDraftPrompt);
+        }
+      }
+    }
+    prevPendingUserInputRef.current = nextRequestId
+      ? { requestId: nextRequestId, draftTarget: composerDraftTarget }
+      : null;
+  }, [
+    activePendingUserInput?.requestId,
+    composerDraftTarget,
+    pendingUserInputAnswersByRequestId,
+    setComposerDraftPrompt,
+  ]);
   const activePendingResolvedAnswers = useMemo(
     () =>
       activePendingUserInput
@@ -6415,6 +6477,11 @@ function ChatViewContent(props: ChatViewProps) {
       setRespondingUserInputRequestIds((existing) =>
         existing.includes(requestId) ? existing : [...existing, requestId],
       );
+      // Marked before the round trip: the resolved activity can arrive over the
+      // socket before this RPC settles, and the rescue effect must already know
+      // the question was answered rather than cancelled. Unmarked on failure so
+      // a later real Stop of the still-open question can rescue the text.
+      submittedPendingUserInputRequestIdsRef.current.add(requestId);
       const result = await respondToThreadUserInput({
         environmentId,
         input: {
@@ -6423,12 +6490,15 @@ function ChatViewContent(props: ChatViewProps) {
           answers,
         },
       });
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
-        setThreadError(
-          activeThreadId,
-          error instanceof Error ? error.message : "Failed to submit user input.",
-        );
+      if (result._tag === "Failure") {
+        submittedPendingUserInputRequestIdsRef.current.delete(requestId);
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          setThreadError(
+            activeThreadId,
+            error instanceof Error ? error.message : "Failed to submit user input.",
+          );
+        }
       }
       setRespondingUserInputRequestIds((existing) => existing.filter((id) => id !== requestId));
       return result;

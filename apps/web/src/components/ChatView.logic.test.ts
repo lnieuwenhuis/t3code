@@ -29,7 +29,9 @@ import {
   isBranchMismatchDismissedForSession,
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
+  mergeComposerDraftPromptWithPendingAnswer,
   resolveBackgroundDraftWorkspaceOptions,
+  resolveCancelledPendingUserInputSnapshot,
   resolveDraftPromotionNavigationTarget,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
@@ -470,6 +472,149 @@ describe("buildThreadTurnInterruptInput", () => {
     expect(buildThreadTurnInterruptInput(makeThread({ session: readySession }))).toEqual({
       threadId,
     });
+  });
+});
+
+describe("resolveCancelledPendingUserInputSnapshot", () => {
+  const previous = {
+    requestId: "req-1",
+    draftTarget: "thread-a",
+  };
+
+  it("rescues the typed answer when the request disappears without being submitted (#8963)", () => {
+    expect(
+      resolveCancelledPendingUserInputSnapshot({
+        previous,
+        nextRequestId: null,
+        currentDraftTarget: "thread-a",
+        answerForPrevious: "run the migration instead",
+        wasSubmitted: false,
+      }),
+    ).toBe("run the migration instead");
+  });
+
+  it("rescues the typed answer when a different question on the same thread becomes active", () => {
+    expect(
+      resolveCancelledPendingUserInputSnapshot({
+        previous,
+        nextRequestId: "req-2",
+        currentDraftTarget: "thread-a",
+        answerForPrevious: "run the migration instead",
+        wasSubmitted: false,
+      }),
+    ).toBe("run the migration instead");
+  });
+
+  it("still rescues a failed submit attempt — only a successful submit is 'submitted'", () => {
+    expect(
+      resolveCancelledPendingUserInputSnapshot({
+        previous,
+        nextRequestId: null,
+        currentDraftTarget: "thread-a",
+        answerForPrevious: "run the migration instead",
+        wasSubmitted: false,
+      }),
+    ).toBe("run the migration instead");
+  });
+
+  it("does not rescue when the answer was actually submitted", () => {
+    expect(
+      resolveCancelledPendingUserInputSnapshot({
+        previous,
+        nextRequestId: null,
+        currentDraftTarget: "thread-a",
+        answerForPrevious: "run the migration instead",
+        wasSubmitted: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("does not rescue when the request id did not actually change", () => {
+    expect(
+      resolveCancelledPendingUserInputSnapshot({
+        previous,
+        nextRequestId: "req-1",
+        currentDraftTarget: "thread-a",
+        answerForPrevious: "run the migration instead",
+        wasSubmitted: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("does not rescue a blank/whitespace-only custom answer", () => {
+    expect(
+      resolveCancelledPendingUserInputSnapshot({
+        previous,
+        nextRequestId: null,
+        currentDraftTarget: "thread-a",
+        answerForPrevious: "   ",
+        wasSubmitted: false,
+      }),
+    ).toBeNull();
+    expect(
+      resolveCancelledPendingUserInputSnapshot({
+        previous,
+        nextRequestId: null,
+        currentDraftTarget: "thread-a",
+        answerForPrevious: undefined,
+        wasSubmitted: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("does not rescue when the user has navigated away to a different thread (#8963 regression)", () => {
+    // The question that owned `previous` may still be open on thread-a, but
+    // the composer currently on screen is thread-b's — writing the rescued
+    // text there would land in the wrong draft (or clobber unrelated text
+    // the user is mid-typing on thread-b).
+    expect(
+      resolveCancelledPendingUserInputSnapshot({
+        previous,
+        nextRequestId: null,
+        currentDraftTarget: "thread-b",
+        answerForPrevious: "run the migration instead",
+        wasSubmitted: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("does nothing when there was no previous pending question", () => {
+    expect(
+      resolveCancelledPendingUserInputSnapshot({
+        previous: null,
+        nextRequestId: null,
+        currentDraftTarget: "thread-a",
+        answerForPrevious: "run the migration instead",
+        wasSubmitted: false,
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("mergeComposerDraftPromptWithPendingAnswer", () => {
+  it("replaces a blank existing draft outright", () => {
+    expect(mergeComposerDraftPromptWithPendingAnswer("", "run the migration instead")).toBe(
+      "run the migration instead",
+    );
+    expect(mergeComposerDraftPromptWithPendingAnswer("   ", "run the migration instead")).toBe(
+      "run the migration instead",
+    );
+  });
+
+  it("leaves an identical existing draft untouched instead of duplicating it", () => {
+    expect(mergeComposerDraftPromptWithPendingAnswer("same text", "same text")).toBe("same text");
+  });
+
+  it("appends the rescued answer after a blank line when the existing draft differs", () => {
+    expect(mergeComposerDraftPromptWithPendingAnswer("older unsent note", "rescued answer")).toBe(
+      "older unsent note\n\nrescued answer",
+    );
+  });
+
+  it("returns null for a blank/whitespace-only custom answer, regardless of the existing draft", () => {
+    expect(mergeComposerDraftPromptWithPendingAnswer("older unsent note", "")).toBeNull();
+    expect(mergeComposerDraftPromptWithPendingAnswer("older unsent note", "   ")).toBeNull();
+    expect(mergeComposerDraftPromptWithPendingAnswer("", "")).toBeNull();
   });
 });
 
