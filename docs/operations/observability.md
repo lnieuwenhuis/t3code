@@ -519,7 +519,8 @@ It provides:
 Local trace file:
 
 - `T3CODE_TRACE_ENABLED`: set to `false` to disable the local NDJSON trace exporter entirely. When
-  disabled, no trace file or directory is created and no spans are written to disk. Default `true`.
+  disabled, no trace file is created and no spans are written to disk; the default logs directory
+  still exists for the other logs. Default `true`.
 - `T3CODE_TRACE_FILE`: override trace file path
 - `T3CODE_TRACE_MAX_BYTES`: per-file rotation size, default `10485760`
 - `T3CODE_TRACE_MAX_FILES`: rotated file count, default `10`
