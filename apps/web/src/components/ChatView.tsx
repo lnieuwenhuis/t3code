@@ -2460,7 +2460,14 @@ function ChatViewContent(props: ChatViewProps) {
   useEffect(() => {
     const nextRequestId = activePendingUserInput?.requestId ?? null;
     const previous = prevPendingUserInputRef.current;
-    if (previous && previous.requestId !== nextRequestId) {
+    // A thread switch only hides the question, so it neither rescues nor
+    // consumes the submitted mark; the real resolve may arrive after the user
+    // returns and must still read as an answer, not a cancel.
+    if (
+      previous &&
+      previous.requestId !== nextRequestId &&
+      previous.draftTarget === composerDraftTarget
+    ) {
       const wasSubmitted = submittedPendingUserInputRequestIdsRef.current.has(previous.requestId);
       submittedPendingUserInputRequestIdsRef.current.delete(previous.requestId);
       if (
