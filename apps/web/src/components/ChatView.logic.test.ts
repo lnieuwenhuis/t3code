@@ -31,7 +31,8 @@ import {
   reconcileRetainedMountedThreadIds,
   mergeComposerDraftPromptWithPendingAnswer,
   resolveBackgroundDraftWorkspaceOptions,
-  resolveCancelledPendingUserInputSnapshot,
+  collectPendingUserInputCustomAnswers,
+  shouldRescueCancelledPendingUserInput,
   resolveDraftPromotionNavigationTarget,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
@@ -475,119 +476,90 @@ describe("buildThreadTurnInterruptInput", () => {
   });
 });
 
-describe("resolveCancelledPendingUserInputSnapshot", () => {
-  const previous = {
-    requestId: "req-1",
-    draftTarget: "thread-a",
-  };
+describe("shouldRescueCancelledPendingUserInput", () => {
+  const previous = { requestId: "req-1", draftTarget: "thread-a" };
 
-  it("rescues the typed answer when the request disappears without being submitted (#8963)", () => {
+  it("rescues when the request disappears without being submitted", () => {
     expect(
-      resolveCancelledPendingUserInputSnapshot({
+      shouldRescueCancelledPendingUserInput({
         previous,
         nextRequestId: null,
         currentDraftTarget: "thread-a",
-        answerForPrevious: "run the migration instead",
         wasSubmitted: false,
       }),
-    ).toBe("run the migration instead");
+    ).toBe(true);
   });
 
-  it("rescues the typed answer when a different question on the same thread becomes active", () => {
+  it("rescues when another question replaces the request in the same render", () => {
     expect(
-      resolveCancelledPendingUserInputSnapshot({
+      shouldRescueCancelledPendingUserInput({
         previous,
         nextRequestId: "req-2",
         currentDraftTarget: "thread-a",
-        answerForPrevious: "run the migration instead",
         wasSubmitted: false,
       }),
-    ).toBe("run the migration instead");
+    ).toBe(true);
   });
 
-  it("still rescues a failed submit attempt — only a successful submit is 'submitted'", () => {
+  it("does not rescue a submitted answer", () => {
     expect(
-      resolveCancelledPendingUserInputSnapshot({
+      shouldRescueCancelledPendingUserInput({
         previous,
         nextRequestId: null,
         currentDraftTarget: "thread-a",
-        answerForPrevious: "run the migration instead",
-        wasSubmitted: false,
-      }),
-    ).toBe("run the migration instead");
-  });
-
-  it("does not rescue when the answer was actually submitted", () => {
-    expect(
-      resolveCancelledPendingUserInputSnapshot({
-        previous,
-        nextRequestId: null,
-        currentDraftTarget: "thread-a",
-        answerForPrevious: "run the migration instead",
         wasSubmitted: true,
       }),
-    ).toBeNull();
+    ).toBe(false);
   });
 
-  it("does not rescue when the request id did not actually change", () => {
+  it("does not rescue when the request is unchanged", () => {
     expect(
-      resolveCancelledPendingUserInputSnapshot({
+      shouldRescueCancelledPendingUserInput({
         previous,
         nextRequestId: "req-1",
         currentDraftTarget: "thread-a",
-        answerForPrevious: "run the migration instead",
         wasSubmitted: false,
       }),
-    ).toBeNull();
+    ).toBe(false);
   });
 
-  it("does not rescue a blank/whitespace-only custom answer", () => {
+  it("does not rescue after switching to another thread", () => {
     expect(
-      resolveCancelledPendingUserInputSnapshot({
-        previous,
-        nextRequestId: null,
-        currentDraftTarget: "thread-a",
-        answerForPrevious: "   ",
-        wasSubmitted: false,
-      }),
-    ).toBeNull();
-    expect(
-      resolveCancelledPendingUserInputSnapshot({
-        previous,
-        nextRequestId: null,
-        currentDraftTarget: "thread-a",
-        answerForPrevious: undefined,
-        wasSubmitted: false,
-      }),
-    ).toBeNull();
-  });
-
-  it("does not rescue when the user has navigated away to a different thread (#8963 regression)", () => {
-    // The question that owned `previous` may still be open on thread-a, but
-    // the composer currently on screen is thread-b's — writing the rescued
-    // text there would land in the wrong draft (or clobber unrelated text
-    // the user is mid-typing on thread-b).
-    expect(
-      resolveCancelledPendingUserInputSnapshot({
+      shouldRescueCancelledPendingUserInput({
         previous,
         nextRequestId: null,
         currentDraftTarget: "thread-b",
-        answerForPrevious: "run the migration instead",
         wasSubmitted: false,
       }),
-    ).toBeNull();
+    ).toBe(false);
   });
 
-  it("does nothing when there was no previous pending question", () => {
+  it("does nothing without a previous request", () => {
     expect(
-      resolveCancelledPendingUserInputSnapshot({
+      shouldRescueCancelledPendingUserInput({
         previous: null,
         nextRequestId: null,
         currentDraftTarget: "thread-a",
-        answerForPrevious: "run the migration instead",
         wasSubmitted: false,
       }),
-    ).toBeNull();
+    ).toBe(false);
+  });
+});
+
+describe("collectPendingUserInputCustomAnswers", () => {
+  it("keeps every non-blank answer of a multi-question request", () => {
+    expect(
+      collectPendingUserInputCustomAnswers({
+        q1: { customAnswer: "first" },
+        q2: { customAnswer: "   " },
+        q3: { customAnswer: "third" },
+      }),
+    ).toBe("first\n\nthird");
+  });
+
+  it("returns null when nothing non-blank was typed", () => {
+    expect(collectPendingUserInputCustomAnswers({ q1: { customAnswer: " " }, q2: {} })).toBeNull();
+    expect(collectPendingUserInputCustomAnswers(undefined)).toBeNull();
   });
 });
 

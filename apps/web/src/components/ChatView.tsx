@@ -367,11 +367,12 @@ import {
   readFileAsDataUrl,
   loadVideoPreviewUrl,
   isVideoPreviewRequestCurrent,
+  collectPendingUserInputCustomAnswers,
   mergeComposerDraftPromptWithPendingAnswer,
   type PendingUserInputRequestSnapshot,
   reconcileMountedTerminalThreadIds,
   resolveBackgroundDraftWorkspaceOptions,
-  resolveCancelledPendingUserInputSnapshot,
+  shouldRescueCancelledPendingUserInput,
   resolveDraftHeroState,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
@@ -1361,6 +1362,8 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const composerDraftTarget: ScopedThreadRef | DraftId =
     routeKind === "server" ? routeThreadRef : props.draftId;
+  const composerDraftTargetRef = useRef(composerDraftTarget);
+  composerDraftTargetRef.current = composerDraftTarget;
   const draftThread = useComposerDraftStore((store) =>
     routeKind === "server"
       ? store.getDraftSessionByRef(routeThreadRef)
@@ -2432,7 +2435,25 @@ function ChatViewContent(props: ChatViewProps) {
         : null,
     [activePendingDraftAnswers, activePendingQuestionIndex, activePendingUserInput],
   );
-  // Rescues a pending question's typed custom answer into the composer draft
+  // Merges a request's typed custom answers into a thread's composer draft.
+  // Answers by request id are never pruned, so they stay readable after the
+  // request itself has disappeared.
+  const rescuePendingUserInputAnswers = useCallback(
+    (requestId: string, draftTarget: ScopedThreadRef | DraftId) => {
+      const text = collectPendingUserInputCustomAnswers(
+        pendingUserInputAnswersByRequestId[requestId],
+      );
+      if (text === null) return;
+      const existingDraftPrompt =
+        useComposerDraftStore.getState().getComposerDraft(draftTarget)?.prompt ?? "";
+      const nextDraftPrompt = mergeComposerDraftPromptWithPendingAnswer(existingDraftPrompt, text);
+      if (nextDraftPrompt !== null) {
+        setComposerDraftPrompt(draftTarget, nextDraftPrompt);
+      }
+    },
+    [pendingUserInputAnswersByRequestId, setComposerDraftPrompt],
+  );
+  // Rescues a pending question's typed custom answers into the composer draft
   // when the question disappears without being answered (issue #8963).
   // `prevPendingUserInputRef` is written only here, so "previous" is always
   // the state before this transition.
@@ -2442,45 +2463,21 @@ function ChatViewContent(props: ChatViewProps) {
     if (previous && previous.requestId !== nextRequestId) {
       const wasSubmitted = submittedPendingUserInputRequestIdsRef.current.has(previous.requestId);
       submittedPendingUserInputRequestIdsRef.current.delete(previous.requestId);
-      // Answers by request id are never pruned, so the outgoing request's
-      // typed text is still readable here.
-      let answerForPrevious: string | null = null;
-      for (const draft of Object.values(
-        pendingUserInputAnswersByRequestId[previous.requestId] ?? {},
-      )) {
-        if (draft.customAnswer && draft.customAnswer.trim().length > 0) {
-          answerForPrevious = draft.customAnswer;
-          break;
-        }
-      }
-      const textToPersist = resolveCancelledPendingUserInputSnapshot({
-        previous,
-        nextRequestId,
-        currentDraftTarget: composerDraftTarget,
-        answerForPrevious,
-        wasSubmitted,
-      });
-      if (textToPersist !== null) {
-        const existingDraftPrompt =
-          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.prompt ?? "";
-        const nextDraftPrompt = mergeComposerDraftPromptWithPendingAnswer(
-          existingDraftPrompt,
-          textToPersist,
-        );
-        if (nextDraftPrompt !== null) {
-          setComposerDraftPrompt(composerDraftTarget, nextDraftPrompt);
-        }
+      if (
+        shouldRescueCancelledPendingUserInput({
+          previous,
+          nextRequestId,
+          currentDraftTarget: composerDraftTarget,
+          wasSubmitted,
+        })
+      ) {
+        rescuePendingUserInputAnswers(previous.requestId, previous.draftTarget);
       }
     }
     prevPendingUserInputRef.current = nextRequestId
       ? { requestId: nextRequestId, draftTarget: composerDraftTarget }
       : null;
-  }, [
-    activePendingUserInput?.requestId,
-    composerDraftTarget,
-    pendingUserInputAnswersByRequestId,
-    setComposerDraftPrompt,
-  ]);
+  }, [activePendingUserInput?.requestId, composerDraftTarget, rescuePendingUserInputAnswers]);
   const activePendingResolvedAnswers = useMemo(
     () =>
       activePendingUserInput
@@ -6492,6 +6489,15 @@ function ChatViewContent(props: ChatViewProps) {
       });
       if (result._tag === "Failure") {
         submittedPendingUserInputRequestIdsRef.current.delete(requestId);
+        // Stop can remove the question while the answer is in flight. The
+        // transition effect skipped it as submitted, so rescue here when the
+        // question is gone and this thread is still on screen.
+        if (
+          prevPendingUserInputRef.current?.requestId !== requestId &&
+          composerDraftTargetRef.current === composerDraftTarget
+        ) {
+          rescuePendingUserInputAnswers(requestId, composerDraftTarget);
+        }
         if (!isAtomCommandInterrupted(result)) {
           const error = squashAtomCommandFailure(result);
           setThreadError(
@@ -6503,7 +6509,14 @@ function ChatViewContent(props: ChatViewProps) {
       setRespondingUserInputRequestIds((existing) => existing.filter((id) => id !== requestId));
       return result;
     },
-    [activeThreadId, environmentId, respondToThreadUserInput, setThreadError],
+    [
+      activeThreadId,
+      composerDraftTarget,
+      environmentId,
+      rescuePendingUserInputAnswers,
+      respondToThreadUserInput,
+      setThreadError,
+    ],
   );
 
   const setActivePendingUserInputQuestionIndex = useCallback(

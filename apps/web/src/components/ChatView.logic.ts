@@ -256,36 +256,37 @@ export interface PendingUserInputRequestSnapshot<TDraftTarget> {
  * While a question is pending, the composer routes typed text into that
  * question's custom answer instead of the persisted draft. The question can
  * disappear for reasons other than being answered (Stop, provider abort,
- * teardown), which would silently discard the text (issue #8963). Returns the
- * text to rescue into the composer draft, or null when the request did not
- * change, the answer was submitted, the thread on screen has changed (an
- * off-screen cancellation is left alone rather than risk the wrong draft), or
- * there is nothing non-blank to keep.
+ * teardown), which would silently discard the text (issue #8963). True when
+ * the request that just disappeared should have its typed answers rescued into
+ * the composer draft: the request changed, it was not submitted, and the same
+ * thread is still on screen (an off-screen cancellation is left alone rather
+ * than risk the wrong draft).
  */
-export function resolveCancelledPendingUserInputSnapshot<TDraftTarget>(input: {
+export function shouldRescueCancelledPendingUserInput<TDraftTarget>(input: {
   previous: PendingUserInputRequestSnapshot<TDraftTarget> | null;
   nextRequestId: string | null;
   currentDraftTarget: TDraftTarget;
-  answerForPrevious: string | null | undefined;
   wasSubmitted: boolean;
-}): string | null {
-  const { previous, nextRequestId, currentDraftTarget, answerForPrevious, wasSubmitted } = input;
-  if (!previous) {
-    return null;
+}): boolean {
+  const { previous, nextRequestId, currentDraftTarget, wasSubmitted } = input;
+  if (!previous || previous.requestId === nextRequestId) {
+    return false;
   }
-  if (previous.requestId === nextRequestId) {
-    return null;
-  }
-  if (wasSubmitted) {
-    return null;
-  }
-  if (previous.draftTarget !== currentDraftTarget) {
-    return null;
-  }
-  if (!answerForPrevious || answerForPrevious.trim().length === 0) {
-    return null;
-  }
-  return answerForPrevious;
+  return !wasSubmitted && previous.draftTarget === currentDraftTarget;
+}
+
+/**
+ * Joins a request's non-blank typed custom answers, one per question, so a
+ * multi-question request keeps every answer the user wrote. Returns null when
+ * nothing non-blank was typed.
+ */
+export function collectPendingUserInputCustomAnswers(
+  answersByQuestion: Record<string, { readonly customAnswer?: string }> | undefined,
+): string | null {
+  const answers = Object.values(answersByQuestion ?? {})
+    .map((draft) => draft.customAnswer ?? "")
+    .filter((answer) => answer.trim().length > 0);
+  return answers.length === 0 ? null : answers.join("\n\n");
 }
 
 /**
