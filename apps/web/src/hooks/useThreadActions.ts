@@ -370,13 +370,10 @@ export function useThreadActions() {
       const orphanedWorktreePath = await resolveOrphanedWorktreePathForDelete({
         threads: orphanCheckThreads,
         threadId: threadRef.threadId,
-        fetchArchivedThreads: async () => {
-          const archivedThreads =
-            resolvedArchivedThreads ?? (await fetchArchivedThreadShells(threadRef.environmentId));
-          return archivedThreads && deletedIds && deletedIds.size > 0
-            ? archivedThreads.filter((entry) => !deletedIds.has(entry.id))
-            : archivedThreads;
-        },
+        fetchArchivedThreads: () =>
+          resolvedArchivedThreads !== undefined
+            ? Promise.resolve(resolvedArchivedThreads)
+            : fetchArchivedThreadShells(threadRef.environmentId),
       });
       const displayWorktreePath = orphanedWorktreePath
         ? formatWorktreePathForDisplay(orphanedWorktreePath)
