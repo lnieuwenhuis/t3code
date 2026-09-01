@@ -77,6 +77,7 @@ export const tailscaleServePortFlag = Flag.integer("tailscale-serve-port").pipe(
 
 const EnvServerConfig = Config.all({
   logLevel: Config.logLevel("T3CODE_LOG_LEVEL").pipe(Config.withDefault("Info")),
+  traceEnabled: Config.boolean("T3CODE_TRACE_ENABLED").pipe(Config.withDefault(true)),
   traceMinLevel: Config.logLevel("T3CODE_TRACE_MIN_LEVEL").pipe(Config.withDefault("Info")),
   traceTimingEnabled: Config.boolean("T3CODE_TRACE_TIMING_ENABLED").pipe(Config.withDefault(true)),
   traceFile: Config.string("T3CODE_TRACE_FILE").pipe(
@@ -290,7 +291,9 @@ export const resolveServerConfig = (
       derivedPaths.settingsPath,
     );
     const serverTracePath = env.traceFile ?? derivedPaths.serverTracePath;
-    yield* fs.makeDirectory(path.dirname(serverTracePath), { recursive: true });
+    if (env.traceEnabled) {
+      yield* fs.makeDirectory(path.dirname(serverTracePath), { recursive: true });
+    }
     const startupPresentation = options?.startupPresentation ?? "browser";
     const isHeadlessStartup = startupPresentation === "headless";
     const noBrowser = Option.getOrElse(
@@ -351,6 +354,7 @@ export const resolveServerConfig = (
 
     const config: ServerConfig.ServerConfig["Service"] = {
       logLevel,
+      traceEnabled: env.traceEnabled,
       traceMinLevel: env.traceMinLevel,
       traceTimingEnabled: env.traceTimingEnabled,
       traceBatchWindowMs: env.traceBatchWindowMs,

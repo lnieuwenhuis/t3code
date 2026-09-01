@@ -41,6 +41,7 @@ const makeDesktopBootstrap = (
 
 it.layer(NodeServices.layer)("cli config resolution", (it) => {
   const defaultObservabilityConfig = {
+    traceEnabled: true,
     traceMinLevel: "Info",
     traceTimingEnabled: true,
     traceBatchWindowMs: 1_000,
@@ -134,6 +135,96 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         tailscaleServePort: 443,
       });
       assert.equal(resolved.stateDir, join(baseDir, "userdata"));
+    }),
+  );
+
+  it.effect("skips creating the trace file directory when T3CODE_TRACE_ENABLED is false", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { join } = yield* Path.Path;
+      const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-trace-disabled-base");
+      const traceFile = join(baseDir, "custom-trace-dir", "server.trace.ndjson");
+
+      const resolved = yield* resolveServerConfig(
+        {
+          mode: Option.none(),
+          port: Option.none(),
+          host: Option.none(),
+          baseDir: Option.some(baseDir),
+          cwd: Option.none(),
+          devUrl: Option.none(),
+          noBrowser: Option.none(),
+          bootstrapFd: Option.none(),
+          autoBootstrapProjectFromCwd: Option.none(),
+          logWebSocketEvents: Option.none(),
+          tailscaleServeEnabled: Option.none(),
+          tailscaleServePort: Option.none(),
+        },
+        Option.none(),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: {
+                  T3CODE_TRACE_ENABLED: "false",
+                  T3CODE_TRACE_FILE: traceFile,
+                },
+              }),
+            ),
+            NetService.layer,
+          ),
+        ),
+      );
+
+      assert.equal(resolved.traceEnabled, false);
+      assert.equal(resolved.serverTracePath, traceFile);
+      const traceDirExists = yield* fs.exists(join(baseDir, "custom-trace-dir"));
+      assert.equal(traceDirExists, false);
+    }),
+  );
+
+  it.effect("creates the trace file directory by default", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { join } = yield* Path.Path;
+      const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-trace-enabled-base");
+      const traceFile = join(baseDir, "custom-trace-dir", "server.trace.ndjson");
+
+      const resolved = yield* resolveServerConfig(
+        {
+          mode: Option.none(),
+          port: Option.none(),
+          host: Option.none(),
+          baseDir: Option.some(baseDir),
+          cwd: Option.none(),
+          devUrl: Option.none(),
+          noBrowser: Option.none(),
+          bootstrapFd: Option.none(),
+          autoBootstrapProjectFromCwd: Option.none(),
+          logWebSocketEvents: Option.none(),
+          tailscaleServeEnabled: Option.none(),
+          tailscaleServePort: Option.none(),
+        },
+        Option.none(),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: {
+                  T3CODE_TRACE_FILE: traceFile,
+                },
+              }),
+            ),
+            NetService.layer,
+          ),
+        ),
+      );
+
+      assert.equal(resolved.traceEnabled, true);
+      const traceDirExists = yield* fs.exists(join(baseDir, "custom-trace-dir"));
+      assert.equal(traceDirExists, true);
     }),
   );
 

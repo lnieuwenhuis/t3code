@@ -32,7 +32,8 @@ server starts: production and explicitly configured homes use
 `<home>/userdata/logs/server.trace.ndjson` (so `~/.t3/userdata/...` by default, or
 `/custom/path/userdata/...` with `--home-dir /custom/path`), a linked worktree dev run uses
 `<worktree>/.t3/userdata/logs/server.trace.ndjson`, and an implicit dev run outside a linked
-worktree uses `~/.t3/dev/logs/server.trace.ndjson`.
+worktree uses `~/.t3/dev/logs/server.trace.ndjson`. Set `T3CODE_TRACE_ENABLED=false` to disable
+local trace export; no file or directory is created in that case.
 
 Important fields common to both record types:
 
@@ -76,7 +77,8 @@ There are two useful modes:
 - local-only: stdout + local `server.trace.ndjson`
 - full local observability: stdout + local trace file + OTLP export to Grafana/Tempo/Prometheus
 
-The local trace file is always on. OTLP export is opt-in.
+The local trace file is on by default. Set `T3CODE_TRACE_ENABLED=false` to turn it off. OTLP export
+is opt-in.
 
 ### Option 1: Local Traces Only
 
@@ -515,6 +517,8 @@ It provides:
 
 Local trace file:
 
+- `T3CODE_TRACE_ENABLED`: set to `false` to disable the local NDJSON trace exporter entirely. When
+  disabled, no trace file or directory is created and no spans are written to disk. Default `true`.
 - `T3CODE_TRACE_FILE`: override trace file path
 - `T3CODE_TRACE_MAX_BYTES`: per-file rotation size, default `10485760`
 - `T3CODE_TRACE_MAX_FILES`: rotated file count, default `10`

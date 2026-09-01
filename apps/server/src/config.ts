@@ -61,6 +61,7 @@ export class ServerConfig extends Context.Service<
   ServerConfig,
   ServerDerivedPaths & {
     readonly logLevel: LogLevel.LogLevel;
+    readonly traceEnabled: boolean;
     readonly traceMinLevel: LogLevel.LogLevel;
     readonly traceTimingEnabled: boolean;
     readonly traceBatchWindowMs: number;
@@ -183,6 +184,7 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
 
   return ServerConfig.of({
     logLevel: "Error",
+    traceEnabled: true,
     traceMinLevel: "Info",
     traceTimingEnabled: true,
     traceBatchWindowMs: 200,

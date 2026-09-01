@@ -27,52 +27,65 @@ export const ObservabilityLive = Layer.unwrap(
       httpHeaderRedactionLayer,
     );
 
-    const tracerLayer = Layer.unwrap(
-      Effect.gen(function* () {
-        const sink = yield* makeTraceSink({
-          filePath: config.serverTracePath,
-          maxBytes: config.traceMaxBytes,
-          maxFiles: config.traceMaxFiles,
-          batchWindowMs: config.traceBatchWindowMs,
-          onFlush: (stats) =>
-            attribution.record({
-              component: "server-trace",
-              operation: "append",
-              logicalWriteBytes: stats.logicalWriteBytes,
-              count: stats.count,
-              durationMs: stats.durationMs,
-            }),
-        });
-        const delegate =
-          config.otlpTracesUrl === undefined
-            ? undefined
-            : yield* OtlpTracer.make({
-                url: config.otlpTracesUrl,
-                exportInterval: `${config.otlpExportIntervalMs} millis`,
-                resource: {
-                  serviceName: config.otlpServiceName,
-                  attributes: {
-                    "service.runtime": "t3-server",
-                    "service.mode": config.mode,
-                  },
-                },
-              });
+    const tracerLayer = config.traceEnabled
+      ? Layer.unwrap(
+          Effect.gen(function* () {
+            const sink = yield* makeTraceSink({
+              filePath: config.serverTracePath,
+              maxBytes: config.traceMaxBytes,
+              maxFiles: config.traceMaxFiles,
+              batchWindowMs: config.traceBatchWindowMs,
+              onFlush: (stats) =>
+                attribution.record({
+                  component: "server-trace",
+                  operation: "append",
+                  logicalWriteBytes: stats.logicalWriteBytes,
+                  count: stats.count,
+                  durationMs: stats.durationMs,
+                }),
+            });
+            const delegate =
+              config.otlpTracesUrl === undefined
+                ? undefined
+                : yield* OtlpTracer.make({
+                    url: config.otlpTracesUrl,
+                    exportInterval: `${config.otlpExportIntervalMs} millis`,
+                    resource: {
+                      serviceName: config.otlpServiceName,
+                      attributes: {
+                        "service.runtime": "t3-server",
+                        "service.mode": config.mode,
+                      },
+                    },
+                  });
 
-        const tracer = yield* makeLocalFileTracer({
-          filePath: config.serverTracePath,
-          maxBytes: config.traceMaxBytes,
-          maxFiles: config.traceMaxFiles,
-          batchWindowMs: config.traceBatchWindowMs,
-          sink,
-          ...(delegate ? { delegate } : {}),
-        });
+            const tracer = yield* makeLocalFileTracer({
+              filePath: config.serverTracePath,
+              maxBytes: config.traceMaxBytes,
+              maxFiles: config.traceMaxFiles,
+              batchWindowMs: config.traceBatchWindowMs,
+              sink,
+              ...(delegate ? { delegate } : {}),
+            });
 
-        return Layer.mergeAll(
-          Layer.succeed(Tracer.Tracer, tracer),
-          BrowserTraceCollector.layer(sink),
+            return Layer.mergeAll(
+              Layer.succeed(Tracer.Tracer, tracer),
+              BrowserTraceCollector.layer(sink),
+            );
+          }),
+        ).pipe(Layer.provide(OtlpExporter.layerFlusher), Layer.provideMerge(otlpSerializationLayer))
+      : // Tracing is disabled: no sink is created, no trace directory or file is touched, and the
+        // default (no-op) Tracer.Tracer reference is left in place. BrowserTraceCollector still
+        // needs a service so the browser-trace HTTP route keeps working; it just discards records.
+        Layer.succeed(
+          BrowserTraceCollector.BrowserTraceCollector,
+          BrowserTraceCollector.make({
+            push: () => {},
+            flush: Effect.void,
+            close: () => Effect.void,
+            filePath: config.serverTracePath,
+          }),
         );
-      }),
-    ).pipe(Layer.provide(OtlpExporter.layerFlusher), Layer.provideMerge(otlpSerializationLayer));
 
     const metricsLayer =
       config.otlpMetricsUrl === undefined

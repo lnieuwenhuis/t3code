@@ -493,6 +493,7 @@ const buildAppUnderTest = (options?: {
     const derivedPaths = yield* ServerConfig.deriveServerPaths(baseDir, devUrl);
     const config: ServerConfig.ServerConfig["Service"] = {
       logLevel: "Info",
+      traceEnabled: true,
       traceMinLevel: "Info",
       traceTimingEnabled: true,
       traceBatchWindowMs: 200,

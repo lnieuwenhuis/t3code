@@ -323,6 +323,7 @@ const makePairServerConfig = Effect.fn(function* (input: {
   );
   return ServerConfig.make({
     logLevel: input.logLevel,
+    traceEnabled: false,
     traceMinLevel: "Info",
     traceTimingEnabled: false,
     traceBatchWindowMs: 1_000,

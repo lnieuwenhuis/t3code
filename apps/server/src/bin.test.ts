@@ -91,6 +91,7 @@ const makeCliTestServerConfig = (baseDir: string) =>
     const derivedPaths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
     return {
       logLevel: "Info",
+      traceEnabled: true,
       traceMinLevel: "Info",
       traceTimingEnabled: true,
       traceBatchWindowMs: 200,
