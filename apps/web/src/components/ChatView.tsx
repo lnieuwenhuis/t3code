@@ -6575,6 +6575,19 @@ function ChatViewContent(props: ChatViewProps) {
       });
       if (result._tag === "Failure") {
         submittedPendingUserInputRequestIdsRef.current.delete(requestId);
+        // The answer was not sent after all, so the persisted copy of the
+        // carried draft comes back (unless something else filled the draft
+        // meanwhile) and the rescue below treats it as blank as usual. This
+        // does not depend on which thread is on screen, so a reload or an
+        // off-screen cancel after a failed submit still finds the draft.
+        if (
+          carried &&
+          (useComposerDraftStore.getState().getComposerDraft(carried.draftTarget)?.prompt ?? "")
+            .length === 0
+        ) {
+          carriedComposerDraftByRequestIdRef.current.set(requestId, carried);
+          setComposerDraftPrompt(carried.draftTarget, carried.text);
+        }
         // Stop can remove the question while the answer is in flight. The
         // transition effect skipped it as submitted, so rescue here when the
         // question is gone and this thread is still on screen.
