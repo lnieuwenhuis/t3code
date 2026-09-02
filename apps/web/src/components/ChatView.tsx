@@ -372,6 +372,7 @@ import {
   type PendingUserInputRequestSnapshot,
   reconcileMountedTerminalThreadIds,
   resolveBackgroundDraftWorkspaceOptions,
+  resolveComposerDraftToCarryIntoPendingUserInput,
   shouldRescueCancelledPendingUserInput,
   resolveDraftHeroState,
   resolveThreadMetadataUpdateForNextTurn,
@@ -1533,6 +1534,13 @@ function ChatViewContent(props: ChatViewProps) {
   // being sent, not the question being cancelled, so the effect below must
   // not rescue its text. Unmarked when the submit fails.
   const submittedPendingUserInputRequestIdsRef = useRef<Set<string>>(new Set());
+  // Draft text carried into a request's first question when the question
+  // appeared. Answer state is in-memory, so the draft store keeps that text
+  // as the persisted copy until the answer is sent; the copy counts as blank
+  // when text returns to the draft so it is never merged with itself.
+  const carriedComposerDraftByRequestIdRef = useRef(
+    new Map<string, { draftTarget: ScopedThreadRef | DraftId; text: string }>(),
+  );
   const shouldUseRightPanelSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   const [terminalFocusRequestId, setTerminalFocusRequestId] = useState(0);
   const [pullRequestDialogState, setPullRequestDialogState] =
@@ -2435,6 +2443,26 @@ function ChatViewContent(props: ChatViewProps) {
         : null,
     [activePendingDraftAnswers, activePendingQuestionIndex, activePendingUserInput],
   );
+  // Text typed in the composer is never dropped: it is sent, or it stays in
+  // the draft. Appends text that is leaving a request's answer slot unsent to
+  // the thread's composer draft, replacing the persisted copy of text that
+  // was carried in from the draft.
+  const returnTextToComposerDraft = useCallback(
+    (requestId: string, text: string, draftTarget: ScopedThreadRef | DraftId) => {
+      const carried = carriedComposerDraftByRequestIdRef.current.get(requestId);
+      carriedComposerDraftByRequestIdRef.current.delete(requestId);
+      const draftPrompt =
+        useComposerDraftStore.getState().getComposerDraft(draftTarget)?.prompt ?? "";
+      const existingDraftPrompt =
+        carried?.draftTarget === draftTarget && draftPrompt === carried.text ? "" : draftPrompt;
+      const nextDraftPrompt =
+        mergeComposerDraftPromptWithPendingAnswer(existingDraftPrompt, text) ?? existingDraftPrompt;
+      if (nextDraftPrompt !== draftPrompt) {
+        setComposerDraftPrompt(draftTarget, nextDraftPrompt);
+      }
+    },
+    [setComposerDraftPrompt],
+  );
   // Merges a request's typed custom answers into a thread's composer draft.
   // Answers by request id are never pruned, so they stay readable after the
   // request itself has disappeared.
@@ -2443,21 +2471,25 @@ function ChatViewContent(props: ChatViewProps) {
       const text = collectPendingUserInputCustomAnswers(
         pendingUserInputAnswersByRequestId[requestId],
       );
-      if (text === null) return;
-      const existingDraftPrompt =
-        useComposerDraftStore.getState().getComposerDraft(draftTarget)?.prompt ?? "";
-      const nextDraftPrompt = mergeComposerDraftPromptWithPendingAnswer(existingDraftPrompt, text);
-      if (nextDraftPrompt !== null) {
-        setComposerDraftPrompt(draftTarget, nextDraftPrompt);
+      if (text !== null) {
+        returnTextToComposerDraft(requestId, text, draftTarget);
       }
     },
-    [pendingUserInputAnswersByRequestId, setComposerDraftPrompt],
+    [pendingUserInputAnswersByRequestId, returnTextToComposerDraft],
   );
-  // Rescues a pending question's typed custom answers into the composer draft
-  // when the question disappears without being answered (issue #8963).
-  // `prevPendingUserInputRef` is written only here, so "previous" is always
-  // the state before this transition.
-  useEffect(() => {
+  const activePendingFirstQuestionId = activePendingUserInput?.questions[0]?.id ?? null;
+  const activePendingHasAnswerState =
+    activePendingUserInput !== null &&
+    pendingUserInputAnswersByRequestId[activePendingUserInput.requestId] !== undefined;
+  // Moves composer text across the pending-question boundary (issue #8963).
+  // A question that just appeared takes over the composer, so the draft is
+  // carried into its first question's free-form answer and stays visible;
+  // a question that disappears without being answered has its typed answers
+  // rescued back into the draft. Both run in a layout effect so the composer
+  // never paints a frame without the text. `prevPendingUserInputRef` is
+  // written only here, so "previous" is always the state before this
+  // transition.
+  useLayoutEffect(() => {
     const nextRequestId = activePendingUserInput?.requestId ?? null;
     const previous = prevPendingUserInputRef.current;
     // A thread switch only hides the question, so it neither rescues nor
@@ -2481,10 +2513,45 @@ function ChatViewContent(props: ChatViewProps) {
         rescuePendingUserInputAnswers(previous.requestId, previous.draftTarget);
       }
     }
+    // Runs after the rescue so text from a question replaced in the same
+    // render follows the user into the new one.
+    if (
+      nextRequestId !== null &&
+      activePendingFirstQuestionId !== null &&
+      previous?.requestId !== nextRequestId
+    ) {
+      const draftToCarry = resolveComposerDraftToCarryIntoPendingUserInput({
+        hasAnswerState: activePendingHasAnswerState,
+        draftPrompt:
+          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.prompt ?? "",
+      });
+      if (draftToCarry !== null) {
+        carriedComposerDraftByRequestIdRef.current.set(nextRequestId, {
+          draftTarget: composerDraftTarget,
+          text: draftToCarry,
+        });
+        setPendingUserInputAnswersByRequestId((existing) => ({
+          ...existing,
+          [nextRequestId]: {
+            ...existing[nextRequestId],
+            [activePendingFirstQuestionId]: setPendingUserInputCustomAnswer(
+              existing[nextRequestId]?.[activePendingFirstQuestionId],
+              draftToCarry,
+            ),
+          },
+        }));
+      }
+    }
     prevPendingUserInputRef.current = nextRequestId
       ? { requestId: nextRequestId, draftTarget: composerDraftTarget }
       : null;
-  }, [activePendingUserInput?.requestId, composerDraftTarget, rescuePendingUserInputAnswers]);
+  }, [
+    activePendingFirstQuestionId,
+    activePendingHasAnswerState,
+    activePendingUserInput?.requestId,
+    composerDraftTarget,
+    rescuePendingUserInputAnswers,
+  ]);
   const activePendingResolvedAnswers = useMemo(
     () =>
       activePendingUserInput
@@ -6486,6 +6553,18 @@ function ChatViewContent(props: ChatViewProps) {
       // the question was answered rather than cancelled. Unmarked on failure so
       // a later real Stop of the still-open question can rescue the text.
       submittedPendingUserInputRequestIdsRef.current.add(requestId);
+      // The answer is what gets sent, so the persisted copy of text carried in
+      // from the draft goes now, before the resolve can bring the draft back
+      // on screen.
+      const carried = carriedComposerDraftByRequestIdRef.current.get(requestId);
+      if (carried) {
+        carriedComposerDraftByRequestIdRef.current.delete(requestId);
+        const draftPrompt =
+          useComposerDraftStore.getState().getComposerDraft(carried.draftTarget)?.prompt ?? "";
+        if (draftPrompt === carried.text) {
+          setComposerDraftPrompt(carried.draftTarget, "");
+        }
+      }
       const result = await respondToThreadUserInput({
         environmentId,
         input: {
@@ -6522,6 +6601,7 @@ function ChatViewContent(props: ChatViewProps) {
       environmentId,
       rescuePendingUserInputAnswers,
       respondToThreadUserInput,
+      setComposerDraftPrompt,
       setThreadError,
     ],
   );
@@ -6544,6 +6624,14 @@ function ChatViewContent(props: ChatViewProps) {
       if (!activePendingUserInput) {
         return;
       }
+      // Choosing an option replaces typed text as the answer, but the text
+      // may be the draft carried in when the question appeared, so it goes
+      // back to the draft instead of being discarded.
+      returnTextToComposerDraft(
+        activePendingUserInput.requestId,
+        activePendingDraftAnswers[questionId]?.customAnswer ?? "",
+        composerDraftTarget,
+      );
       setPendingUserInputAnswersByRequestId((existing) => {
         const question =
           (activePendingProgress?.activeQuestion?.id === questionId
@@ -6569,7 +6657,14 @@ function ChatViewContent(props: ChatViewProps) {
       promptRef.current = "";
       composerRef.current?.resetCursorState({ cursor: 0 });
     },
-    [activePendingProgress?.activeQuestion, activePendingUserInput, composerRef],
+    [
+      activePendingDraftAnswers,
+      activePendingProgress?.activeQuestion,
+      activePendingUserInput,
+      composerDraftTarget,
+      composerRef,
+      returnTextToComposerDraft,
+    ],
   );
 
   const onChangeActivePendingUserInputCustomAnswer = useCallback(

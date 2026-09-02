@@ -313,6 +313,25 @@ export function mergeComposerDraftPromptWithPendingAnswer(
   return `${existingDraftPrompt}\n\n${pendingCustomAnswer}`;
 }
 
+/**
+ * A question that has just arrived takes over the composer, which would hide
+ * whatever the user was typing until the question resolves (issue #8963).
+ * Returns the draft text to carry into the request's first question as its
+ * free-form answer, so the composer visibly keeps it and Send offers it as
+ * the reply. Null when there is nothing to carry: the request already has
+ * answer state (it was seen before, e.g. on an earlier visit to the thread)
+ * or the draft is blank.
+ */
+export function resolveComposerDraftToCarryIntoPendingUserInput(input: {
+  hasAnswerState: boolean;
+  draftPrompt: string;
+}): string | null {
+  if (input.hasAnswerState || input.draftPrompt.trim().length === 0) {
+    return null;
+  }
+  return input.draftPrompt;
+}
+
 export function reconcileMountedTerminalThreadIds(input: {
   currentThreadIds: ReadonlyArray<string>;
   openThreadIds: ReadonlyArray<string>;

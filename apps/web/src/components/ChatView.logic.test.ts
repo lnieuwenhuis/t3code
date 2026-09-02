@@ -32,6 +32,7 @@ import {
   mergeComposerDraftPromptWithPendingAnswer,
   resolveBackgroundDraftWorkspaceOptions,
   collectPendingUserInputCustomAnswers,
+  resolveComposerDraftToCarryIntoPendingUserInput,
   shouldRescueCancelledPendingUserInput,
   resolveDraftPromotionNavigationTarget,
   resolveThreadMetadataUpdateForNextTurn,
@@ -587,6 +588,38 @@ describe("mergeComposerDraftPromptWithPendingAnswer", () => {
     expect(mergeComposerDraftPromptWithPendingAnswer("older unsent note", "")).toBeNull();
     expect(mergeComposerDraftPromptWithPendingAnswer("older unsent note", "   ")).toBeNull();
     expect(mergeComposerDraftPromptWithPendingAnswer("", "")).toBeNull();
+  });
+});
+
+describe("resolveComposerDraftToCarryIntoPendingUserInput", () => {
+  it("carries the typed draft into a question that has just arrived", () => {
+    expect(
+      resolveComposerDraftToCarryIntoPendingUserInput({
+        hasAnswerState: false,
+        draftPrompt: "actually, use the existing migration",
+      }),
+    ).toBe("actually, use the existing migration");
+  });
+
+  it("leaves a question alone once it already has answer state", () => {
+    expect(
+      resolveComposerDraftToCarryIntoPendingUserInput({
+        hasAnswerState: true,
+        draftPrompt: "typed after coming back to the thread",
+      }),
+    ).toBeNull();
+  });
+
+  it("carries nothing when the draft is blank", () => {
+    expect(
+      resolveComposerDraftToCarryIntoPendingUserInput({ hasAnswerState: false, draftPrompt: "" }),
+    ).toBeNull();
+    expect(
+      resolveComposerDraftToCarryIntoPendingUserInput({
+        hasAnswerState: false,
+        draftPrompt: "  \n ",
+      }),
+    ).toBeNull();
   });
 });
 
