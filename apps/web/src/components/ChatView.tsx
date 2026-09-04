@@ -382,6 +382,7 @@ import {
   resolveFileAttachmentUrl,
   reconcileMountedTerminalThreadIds,
   resolveBackgroundDraftWorkspaceOptions,
+  resolveBranchAfterEnvModeChange,
   resolveComposerInteractionMode,
   resolveComposerProviderSelection,
   resolveDraftHeroState,
@@ -7420,8 +7421,16 @@ export default function ChatView(props: ChatViewProps) {
   );
   const onEnvModeChange = useCallback(
     (mode: DraftThreadEnvMode) => {
+      const nextBranch = resolveBranchAfterEnvModeChange({
+        currentMode: envMode,
+        nextMode: mode,
+        currentBranch: activeThreadBranch,
+      });
       if (canOverrideServerThreadEnvMode) {
         setPendingServerThreadEnvMode(mode);
+        if (nextBranch !== activeThreadBranch) {
+          setPendingServerThreadBranch(nextBranch);
+        }
         scheduleComposerFocus();
         return;
       }
@@ -7432,18 +7441,22 @@ export default function ChatView(props: ChatViewProps) {
             envMode: mode,
             newWorktreesStartFromOrigin: primaryServerSettings.newWorktreesStartFromOrigin,
           }),
+          ...(nextBranch !== activeThreadBranch ? { branch: nextBranch } : {}),
           ...(mode === "worktree" && draftThread?.worktreePath ? { worktreePath: null } : {}),
         });
       }
       scheduleComposerFocus();
     },
     [
+      activeThreadBranch,
       canOverrideServerThreadEnvMode,
       composerDraftTarget,
       draftThread?.worktreePath,
+      envMode,
       isLocalDraftThread,
       primaryServerSettings.newWorktreesStartFromOrigin,
       setPendingServerThreadEnvMode,
+      setPendingServerThreadBranch,
       scheduleComposerFocus,
       setDraftThreadContext,
     ],
