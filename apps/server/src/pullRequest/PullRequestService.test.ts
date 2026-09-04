@@ -3290,6 +3290,63 @@ it.effect("an invalidated detail read sees an external change a plain re-read ho
   }),
 );
 
+it.effect("a detail-scoped invalidate refreshes detail without stranding the held diff", () =>
+  Effect.gen(function* () {
+    const diffGate = yield* Deferred.make<void>();
+    let detailCalls = 0;
+    let diffCalls = 0;
+    let hostTitle = "old title";
+    let hostPatch = "old patch";
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequest: () =>
+            Effect.sync(() => {
+              detailCalls += 1;
+              return { ...hostedChangeRequest("polled body", 4), title: hostTitle };
+            }),
+          getDiff: () =>
+            Effect.gen(function* () {
+              diffCalls += 1;
+              // The stale-while-revalidate background refresh stalls here, so a held diff
+              // must answer from its snapshot rather than wait on the host.
+              if (diffCalls === 2) yield* Deferred.await(diffGate);
+              return { patch: hostPatch, truncated: false, nextCursor: null };
+            }),
+        }),
+      ],
+    });
+
+    const firstDetail = yield* service.detail(reference);
+    assert.strictEqual(firstDetail.title, "old title");
+    const firstDiff = yield* service.diff(reference);
+    assert.strictEqual(firstDiff.patch, "old patch");
+    assert.strictEqual(diffCalls, 1);
+
+    hostTitle = "new title";
+    hostPatch = "new patch";
+    // Past the diff cache TTL but inside the stale-while-revalidate window, so a held diff
+    // answers from its snapshot while refreshing behind it.
+    yield* TestClock.adjust("61 seconds");
+
+    // The poll path: detail misses the hold while the diff key — and its hold — is untouched.
+    yield* service.invalidate({ reference, scope: "detail" });
+    const polledDetail = yield* service.detail(reference);
+    assert.strictEqual(polledDetail.title, "new title");
+    assert.strictEqual(detailCalls, 2);
+
+    const polledDiff = yield* service.diff(reference);
+    assert.strictEqual(polledDiff.patch, "old patch");
+    yield* Effect.yieldNow;
+    assert.strictEqual(diffCalls, 2);
+
+    yield* Deferred.succeed(diffGate, undefined);
+    yield* Effect.yieldNow;
+  }),
+);
+
 it.effect("does not ask the host again for a linked summary it already holds", () =>
   Effect.gen(function* () {
     let calls = 0;
