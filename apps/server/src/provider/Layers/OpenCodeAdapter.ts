@@ -1692,6 +1692,7 @@ export function makeOpenCodeAdapter(
           { clearActiveTurnId: true, clearLastError: true },
         );
       }
+      yield* settleRunningOpenCodeTasks(context, turnId, raw);
       yield* clearPendingOpenCodeRequests(context, { type: "session.abort" });
       yield* emit({
         ...(yield* buildEventBase({
@@ -1900,6 +1901,38 @@ export function makeOpenCodeAdapter(
       const task = settleOpenCodeTask(context, notification.taskId, notification.status);
       if (task) {
         yield* emitTaskTerminal(context, task, notification, turnId, raw);
+      }
+    });
+
+    /**
+     * Stop aborts every child session, so each Task still running settles
+     * as stopped. A late part for that same tool call is then a replay and
+     * cannot reopen the row.
+     */
+    const settleRunningOpenCodeTasks = Effect.fn("settleRunningOpenCodeTasks")(function* (
+      context: OpenCodeSessionContext,
+      turnId: TurnId,
+      raw: unknown,
+    ) {
+      for (const task of context.taskLifecycleByTaskId.values()) {
+        if (task.status !== "running") {
+          continue;
+        }
+        task.status = "stopped";
+        yield* emit({
+          ...(yield* buildEventBase({
+            threadId: context.session.threadId,
+            turnId,
+            itemId: task.toolUseId,
+            raw,
+          })),
+          type: "task.completed",
+          payload: {
+            taskId: task.taskId,
+            status: "stopped",
+            ...taskLinkage(task),
+          },
+        });
       }
     });
 

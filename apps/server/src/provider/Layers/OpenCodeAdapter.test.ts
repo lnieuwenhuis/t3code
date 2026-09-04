@@ -7567,6 +7567,156 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
+  it.effect("settles running Tasks as stopped when the turn is interrupted", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-task-interrupt");
+      const runningPartEvent = promiseWithResolvers<unknown>();
+      runtimeMock.state.subscribedEvents = [runningPartEvent.promise];
+      const started = yield* Deferred.make<void>();
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.threadId === threadId &&
+            (event.type === "task.started" ||
+              event.type === "task.updated" ||
+              event.type === "task.completed"),
+        ),
+        Stream.tap((event) =>
+          event.type === "task.started" ? Deferred.succeed(started, undefined) : Effect.void,
+        ),
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({
+        threadId,
+        input: "Spawn a subagent",
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("opencode"),
+          "opencode/kimi-k3",
+        ),
+      });
+      runningPartEvent.resolve(
+        partUpdated(
+          taskPart({
+            id: "interrupt",
+            taskId: "task-interrupt",
+            description: "Summarize notes",
+            role: "general",
+            status: "running",
+          }),
+        ),
+      );
+      yield* Deferred.await(started).pipe(Effect.timeout("1 second"));
+      yield* adapter.interruptTurn(threadId, turn.turnId);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+      NodeAssert.deepEqual(
+        events.map((event) => {
+          NodeAssert.ok(
+            event.type === "task.started" ||
+              event.type === "task.updated" ||
+              event.type === "task.completed",
+          );
+          return [
+            event.type,
+            event.payload.taskId,
+            "status" in event.payload ? event.payload.status : undefined,
+          ];
+        }),
+        [
+          ["task.started", "task-interrupt", undefined],
+          ["task.completed", "task-interrupt", "stopped"],
+        ],
+      );
+      const stopped = events[1];
+      NodeAssert.ok(stopped?.type === "task.completed");
+      NodeAssert.equal(stopped.turnId, turn.turnId);
+      NodeAssert.equal(stopped.payload.toolUseId, "call-interrupt");
+      NodeAssert.equal(stopped.payload.role, "general");
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("ignores a late running part for a settled Task", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-task-late-part");
+      const running = taskPart({
+        id: "late",
+        taskId: "task-late",
+        description: "Summarize notes",
+        role: "general",
+        status: "running",
+      });
+      // A delayed duplicate of the running part after the terminal must not
+      // read as a reactivation, or the row flips back to working.
+      runtimeMock.state.subscribedEvents = [
+        partUpdated(running),
+        partUpdated(
+          taskPart({
+            id: "late",
+            taskId: "task-late",
+            description: "Summarize notes",
+            role: "general",
+            status: "completed",
+            result: "Done.",
+          }),
+        ),
+        partUpdated(running),
+        partUpdated({
+          id: "late-sentinel",
+          sessionID: OPEN_CODE_SESSION_ID,
+          messageID: "msg-late-sentinel",
+          type: "tool",
+          callID: "call-late-sentinel",
+          tool: "bash",
+          state: {
+            status: "completed",
+            input: {},
+            title: "Verify late part handling",
+            output: "done",
+            metadata: {},
+            time: { start: 3, end: 4 },
+          },
+        }),
+      ];
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.threadId === threadId &&
+            (event.type === "task.started" ||
+              event.type === "task.updated" ||
+              event.type === "task.completed" ||
+              (event.type === "item.completed" && String(event.itemId) === "call-late-sentinel")),
+        ),
+        Stream.take(3),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+      NodeAssert.deepEqual(
+        events.map((event) => event.type),
+        ["task.started", "task.completed", "item.completed"],
+      );
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
   it.effect("passes the thread title to session.create when provided", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
