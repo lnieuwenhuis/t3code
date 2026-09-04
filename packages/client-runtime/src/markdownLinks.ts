@@ -208,6 +208,17 @@ export function stripSlashPrefixedWindowsDrive(path: string): string {
   return SLASH_PREFIXED_WINDOWS_DRIVE_PATTERN.test(path) ? path.slice(1) : path;
 }
 
+/**
+ * Workspace containment compares case-insensitively only on Windows
+ * filesystems (drive-letter paths and backslash UNC shares). POSIX paths
+ * stay case-sensitive — including double-slash `//` paths, which are not
+ * UNC shares.
+ */
+export function isWindowsFilesystemPath(path: string): boolean {
+  const normalizedPath = stripSlashPrefixedWindowsDrive(path.replaceAll("\\", "/"));
+  return /^[A-Za-z]:(?:\/|$)/.test(normalizedPath) || path.startsWith("\\\\");
+}
+
 export function splitMarkdownLinkSearchAndHash(value: string): {
   readonly path: string;
   readonly hash: string;
@@ -342,6 +353,9 @@ export function workspaceRelativeFilePath(
   const normalizedRoot = stripSlashPrefixedWindowsDrive(
     workspaceRoot.replaceAll("\\", "/"),
   ).replace(/\/+$/, "");
-  if (!normalizedPath.toLowerCase().startsWith(`${normalizedRoot.toLowerCase()}/`)) return null;
+  const caseInsensitive = isWindowsFilesystemPath(workspaceRoot);
+  const pathForCompare = caseInsensitive ? normalizedPath.toLowerCase() : normalizedPath;
+  const rootForCompare = caseInsensitive ? normalizedRoot.toLowerCase() : normalizedRoot;
+  if (!pathForCompare.startsWith(`${rootForCompare}/`)) return null;
   return normalizedPath.slice(normalizedRoot.length + 1);
 }

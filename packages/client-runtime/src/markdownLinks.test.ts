@@ -4,6 +4,7 @@ import {
   fileBasename,
   inlineCodeFilePathCandidate,
   isConventionalFilePosition,
+  isWindowsFilesystemPath,
   parseFileUrlHref,
   parseMarkdownFileLink,
   splitFilePathPosition,
@@ -97,6 +98,7 @@ describe("parseMarkdownFileLink", () => {
     ["apps/mobile/src/index.ts:10", "apps/mobile/src/index.ts"],
     ["docs/My%20Folder/checklist.xml", "docs/My Folder/checklist.xml"],
     ["Updated%20cutover%20checklist.md", "Updated cutover checklist.md"],
+    ["/tmp/repo/file.ts%20", "/tmp/repo/file.ts "],
     ["./scripts/deploy", "./scripts/deploy"],
     ["~/notes/today.md", "~/notes/today.md"],
     ["AGENTS.md", "AGENTS.md"],
@@ -160,11 +162,38 @@ describe("workspaceRelativeFilePath", () => {
     ["/repo/project/src/main.ts", "/repo/project/", "src/main.ts"],
     ["C:\\Users\\mike\\t3code\\apps\\web\\a.ts", "C:/Users/mike/t3code", "apps/web/a.ts"],
     ["/C:/Users/mike/t3code/apps/web/a.ts", "C:/Users/mike/t3code", "apps/web/a.ts"],
-    ["/Repo/Project/src/main.ts", "/repo/project", "src/main.ts"],
+    ["C:/Users/MIKE/project/src/main.ts", "c:/users/mike/project", "src/main.ts"],
+    ["C:/Users/MIKE/project.ts", "c:/", "Users/MIKE/project.ts"],
+    ["C:/Users/mike/project.ts", "C:/", "Users/mike/project.ts"],
+    ["/usr/bin/tool", "/", "usr/bin/tool"],
+    ["\\\\server\\share\\PROJECT\\src\\main.ts", "\\\\Server\\Share\\Project", "src/main.ts"],
+    ["\\\\SERVER\\Share\\file.ts", "\\\\server\\share\\", "file.ts"],
+    ["/tmp/repo/file.ts ", "/tmp/repo", "file.ts "],
+    ["/Repo/Project/src/main.ts", "/repo/project", null],
+    ["/tmp/t3code-case-test/project/probe.txt", "/tmp/t3code-case-test/Project", null],
+    ["//tmp/project/probe.txt", "//tmp/Project", null],
     ["/tmp/report.ts", "/repo/project", null],
     ["/repo/project-two/a.ts", "/repo/project", null],
     ["/repo/project/a.ts", undefined, null],
   ])("relates %s to %s", (path, workspaceRoot, relativePath) => {
     expect(workspaceRelativeFilePath(path, workspaceRoot)).toBe(relativePath);
+  });
+});
+
+describe("isWindowsFilesystemPath", () => {
+  it.each([
+    ["C:/Users/mike/project", true],
+    ["c:/", true],
+    ["C:", true],
+    ["/C:/Users/mike/project", true],
+    ["C:\\Users\\mike\\project", true],
+    ["\\\\Server\\Share\\Project", true],
+    ["\\\\server\\share\\", true],
+    ["/repo/project", false],
+    ["/", false],
+    ["//tmp/Project", false],
+    ["relative/path/a.ts", false],
+  ])("classifies %s as %s", (path, expected) => {
+    expect(isWindowsFilesystemPath(path)).toBe(expected);
   });
 });

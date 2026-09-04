@@ -38,4 +38,25 @@ describe("formatWorkspaceRelativePath", () => {
       ),
     ).toBe("t3code/apps/web/src/session-logic.ts:501:9");
   });
+
+  it("does not format a case-distinct POSIX sibling as workspace-relative", () => {
+    expect(
+      formatWorkspaceRelativePath(
+        "/tmp/t3code-case-test/project/probe.txt",
+        "/tmp/t3code-case-test/Project",
+      ),
+    ).toBe("/tmp/t3code-case-test/project/probe.txt");
+  });
+
+  it("keeps double-slash POSIX paths case-sensitive", () => {
+    expect(formatWorkspaceRelativePath("//tmp/project/probe.txt", "//tmp/Project")).toBe(
+      "//tmp/project/probe.txt",
+    );
+  });
+
+  it("keeps Windows workspace formatting case-insensitive", () => {
+    expect(
+      formatWorkspaceRelativePath("C:/Users/MIKE/Project/src/main.ts", "c:/users/mike/project"),
+    ).toBe("project/src/main.ts");
+  });
 });

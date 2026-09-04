@@ -254,6 +254,54 @@ describe("resolveMarkdownFileLinkTarget", () => {
     });
   });
 
+  it("does not classify a case-distinct POSIX sibling as a workspace file", () => {
+    expect(
+      resolveMarkdownFileLinkMeta(
+        "/tmp/t3code-case-test/project/probe.txt",
+        "/tmp/t3code-case-test/Project",
+      ),
+    ).toMatchObject({
+      displayPath: "/tmp/t3code-case-test/project/probe.txt",
+      workspaceRelativePath: null,
+    });
+  });
+
+  it("keeps Windows workspace comparisons case-insensitive", () => {
+    expect(
+      resolveMarkdownFileLinkMeta("C:/Users/MIKE/Project/src/main.ts", "c:/users/mike/project"),
+    ).toMatchObject({
+      displayPath: "project/src/main.ts",
+      workspaceRelativePath: "src/main.ts",
+    });
+  });
+
+  it("keeps drive-root workspace comparisons case-insensitive", () => {
+    expect(resolveMarkdownFileLinkMeta("C:/Users/MIKE/project.ts", "c:/")).toMatchObject({
+      displayPath: "c:/Users/MIKE/project.ts",
+      workspaceRelativePath: "Users/MIKE/project.ts",
+    });
+  });
+
+  it("keeps backslash UNC workspace comparisons case-insensitive", () => {
+    expect(
+      resolveMarkdownFileLinkMeta(
+        "\\\\server\\share\\PROJECT\\src\\main.ts",
+        "\\\\Server\\Share\\Project",
+      ),
+    ).toMatchObject({
+      displayPath: "Project/src/main.ts",
+      workspaceRelativePath: "src/main.ts",
+    });
+  });
+
+  it("preserves trailing whitespace in encoded workspace file paths", () => {
+    expect(resolveMarkdownFileLinkMeta("/tmp/repo/file.ts%20", "/tmp/repo")).toMatchObject({
+      targetPath: "/tmp/repo/file.ts ",
+      displayPath: "repo/file.ts ",
+      workspaceRelativePath: "file.ts ",
+    });
+  });
+
   it("normalizes slash-prefixed windows drive paths before resolving", () => {
     expect(
       resolveMarkdownFileLinkTarget(
