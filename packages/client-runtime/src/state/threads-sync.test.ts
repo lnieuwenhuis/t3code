@@ -1049,6 +1049,82 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
+  it.effect("does not resubscribe a missing thread on session replacement", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ cached: BASE_THREAD });
+      yield* Queue.offer(
+        harness.inputs,
+        new OrchestrationGetSnapshotError({
+          message: `Thread ${THREAD_ID} was not found`,
+          cause: THREAD_ID,
+          threadDisposition: "not-found",
+        }),
+      );
+      yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(1);
+
+      // A supervisor.session replacement drives the outer session stream in
+      // subscribeDynamic. The terminal tombstone must terminate that path too,
+      // not just foreground wakeups.
+      yield* harness.replaceSession;
+      yield* TestClock.adjust("30 seconds");
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        yield* Effect.yieldNow;
+      }
+
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(1);
+      const latest = yield* Ref.get(harness.latest);
+      expect(latest.status).toBe("deleted");
+      expect(Option.isNone(latest.data)).toBe(true);
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(0);
+    }),
+  );
+
+  it.effect("resubscribes on session replacement after a non-matching failure", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      yield* Queue.offer(
+        harness.inputs,
+        new OrchestrationGetSnapshotError({
+          message: `Failed to load thread ${THREAD_ID}`,
+          cause: THREAD_ID,
+        }),
+      );
+
+      const failed = yield* awaitThreadState(harness.observed, (value) =>
+        Option.isSome(value.error),
+      );
+      expect(failed.status).not.toBe("deleted");
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(1);
+
+      // Non-terminal failures keep the session-driven path alive: a
+      // replacement session must re-issue subscribeThread.
+      yield* harness.replaceSession;
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if ((yield* Ref.get(harness.subscriptionCount)) >= 2) break;
+        yield* Effect.yieldNow;
+      }
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(2);
+
+      yield* Queue.offer(
+        harness.inputs,
+        snapshot({
+          ...BASE_THREAD,
+          title: "Recovered thread",
+        }),
+      );
+      const recovered = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          value.status === "live" &&
+          Option.isSome(value.data) &&
+          value.data.value.title === "Recovered thread",
+      );
+      expect(Option.isNone(recovered.error)).toBe(true);
+      expect(yield* Ref.get(harness.removedThreads)).toEqual([]);
+    }),
+  );
+
   it.effect("does not resurrect a missing thread via queued persistence", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ cached: BASE_THREAD });

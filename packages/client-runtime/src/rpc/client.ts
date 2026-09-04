@@ -1,6 +1,7 @@
 import { ORCHESTRATION_WS_METHODS, WS_METHODS } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -200,6 +201,10 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
     Effect.gen(function* () {
       const supervisor = yield* EnvironmentSupervisor;
       const observer = yield* EnvironmentRpcSubscriptionObserver;
+      // Signaled once a terminalFailure handler runs. Interrupts the outer
+      // session stream below so a later supervisor.session replacement cannot
+      // re-issue the subscription after a terminal tombstone.
+      const terminalHalt = yield* Deferred.make<void>();
       const sessionChanges = SubscriptionRef.changes(supervisor.session);
       const sessions =
         options?.resubscribe === undefined
@@ -211,6 +216,7 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
               ),
             );
       return sessions.pipe(
+        Stream.interruptWhen(Deferred.await(terminalHalt)),
         Stream.switchMap(
           Option.match({
             onNone: () => Stream.empty,
@@ -267,7 +273,15 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
                             ).pipe(Stream.drain);
                           }
                           if (isTerminal && terminal !== undefined) {
-                            return Stream.fromEffect(terminal.handle(cause)).pipe(Stream.drain);
+                            return Stream.fromEffect(
+                              terminal
+                                .handle(cause)
+                                .pipe(
+                                  Effect.ensuring(
+                                    Deferred.succeed(terminalHalt, undefined).pipe(Effect.asVoid),
+                                  ),
+                                ),
+                            ).pipe(Stream.drain);
                           }
                           if (hasOnlyExpectedFailures && options?.onExpectedFailure !== undefined) {
                             const handled = Stream.fromEffect(
