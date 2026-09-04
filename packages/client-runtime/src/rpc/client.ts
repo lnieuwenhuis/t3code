@@ -201,9 +201,11 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
     Effect.gen(function* () {
       const supervisor = yield* EnvironmentSupervisor;
       const observer = yield* EnvironmentRpcSubscriptionObserver;
-      // Signaled once a terminalFailure handler runs. Interrupts the outer
-      // session stream below so a later supervisor.session replacement cannot
-      // re-issue the subscription after a terminal tombstone.
+      // Signaled before a terminalFailure handler runs. Interrupts the
+      // outer session stream below so a supervisor.session replacement
+      // landing during the handler's cache I/O cannot re-issue the
+      // subscription after a terminal tombstone; the handler itself still
+      // runs to completion as the draining inner.
       const terminalHalt = yield* Deferred.make<void>();
       const sessionChanges = SubscriptionRef.changes(supervisor.session);
       const sessions =
@@ -273,14 +275,16 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
                             ).pipe(Stream.drain);
                           }
                           if (isTerminal && terminal !== undefined) {
+                            // Halt first: handle performs cache I/O, and a
+                            // session replacement in that window must not
+                            // start a new inner subscribe before the interrupt
+                            // lands. The handler still runs to completion as
+                            // the draining inner.
                             return Stream.fromEffect(
-                              terminal
-                                .handle(cause)
-                                .pipe(
-                                  Effect.ensuring(
-                                    Deferred.succeed(terminalHalt, undefined).pipe(Effect.asVoid),
-                                  ),
-                                ),
+                              Deferred.succeed(terminalHalt, undefined).pipe(
+                                Effect.asVoid,
+                                Effect.andThen(terminal.handle(cause)),
+                              ),
                             ).pipe(Stream.drain);
                           }
                           if (hasOnlyExpectedFailures && options?.onExpectedFailure !== undefined) {

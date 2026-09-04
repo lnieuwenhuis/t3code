@@ -142,6 +142,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   readonly resumeCache?: NonNullable<Parameters<typeof makeEnvironmentThreadState>[1]>;
   readonly loadCached?: Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>>;
   readonly saveThread?: Persistence.EnvironmentCacheStore["Service"]["saveThread"];
+  readonly onRemoveThread?: Effect.Effect<void>;
 }) {
   const inputs = yield* Queue.unbounded<TestThreadInput>();
   const observed = yield* Queue.unbounded<EnvironmentThreadState>();
@@ -224,7 +225,9 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
         Effect.andThen(options?.saveThread?.(environmentId, thread) ?? Effect.void),
       ),
     removeThread: (_environmentId, threadId) =>
-      Ref.update(removedThreads, (current) => [...current, threadId]),
+      (options?.onRemoveThread ?? Effect.void).pipe(
+        Effect.andThen(Ref.update(removedThreads, (current) => [...current, threadId])),
+      ),
     loadServerConfig: () => Effect.succeed(Option.none()),
     saveServerConfig: () => Effect.void,
     loadVcsRefs: () => Effect.succeed(Option.none()),
@@ -1076,6 +1079,50 @@ describe("EnvironmentThreads", () => {
       const latest = yield* Ref.get(harness.latest);
       expect(latest.status).toBe("deleted");
       expect(Option.isNone(latest.data)).toBe(true);
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(0);
+    }),
+  );
+
+  it.effect("does not resubscribe when the session is replaced mid-handle", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const harness = yield* makeHarness({
+        cached: BASE_THREAD,
+        onRemoveThread: Deferred.succeed(entered, undefined).pipe(
+          Effect.asVoid,
+          Effect.andThen(Deferred.await(release)),
+        ),
+      });
+      yield* Queue.offer(
+        harness.inputs,
+        new OrchestrationGetSnapshotError({
+          message: `Thread ${THREAD_ID} was not found`,
+          cause: THREAD_ID,
+          threadDisposition: "not-found",
+        }),
+      );
+
+      // Block the terminal handler inside its cache I/O, then replace the
+      // session mid-handle. The halt must already have fired, so the dead
+      // outer session stream cannot start a second subscribe. Deterministic:
+      // Deferred gates only, no sleeps.
+      yield* Deferred.await(entered);
+      yield* harness.replaceSession;
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if ((yield* Ref.get(harness.subscriptionCount)) > 1) break;
+        yield* Effect.yieldNow;
+      }
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(1);
+
+      yield* Deferred.succeed(release, undefined);
+      yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
+
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(1);
+      const latest = yield* Ref.get(harness.latest);
+      expect(latest.status).toBe("deleted");
+      expect(Option.isNone(latest.data)).toBe(true);
+      expect(yield* Ref.get(harness.removedThreads)).toEqual([THREAD_ID]);
       expect(yield* Ref.get(harness.loaderCalls)).toBe(0);
     }),
   );
