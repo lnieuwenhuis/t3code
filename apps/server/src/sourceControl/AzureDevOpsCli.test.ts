@@ -147,8 +147,11 @@ describe("AzureDevOpsCli.layer", () => {
               targetRefName: "refs/heads/main",
               status: "active",
               forkSource: {
-                name: "refs/heads/feature/from-fork",
-                repository: { name: "repo-fork" },
+                name: null,
+                repository: {
+                  name: null,
+                  project: null,
+                },
               },
             }),
           ),
@@ -157,6 +160,38 @@ describe("AzureDevOpsCli.layer", () => {
 
       const az = yield* AzureDevOpsCli.AzureDevOpsCli;
       const result = yield* az.getPullRequest({ cwd: "/repo", reference: "44" });
+
+      expect(result).toMatchObject({
+        headRefName: "refs/pull/44/source",
+        isCrossRepository: true,
+      });
+      expect(result).not.toHaveProperty("headRepositoryNameWithOwner");
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("accepts a null Azure fork repository", () =>
+    Effect.gen(function* () {
+      mockRun.mockReturnValueOnce(
+        Effect.succeed(
+          processOutput(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({
+              pullRequestId: 45,
+              title: "Add Azure fork support",
+              sourceRefName: "refs/pull/45/source",
+              targetRefName: "refs/heads/main",
+              status: "active",
+              forkSource: {
+                name: "refs/heads/feature/from-fork",
+                repository: null,
+              },
+            }),
+          ),
+        ),
+      );
+
+      const az = yield* AzureDevOpsCli.AzureDevOpsCli;
+      const result = yield* az.getPullRequest({ cwd: "/repo", reference: "45" });
 
       expect(result).toMatchObject({
         headRefName: "feature/from-fork",

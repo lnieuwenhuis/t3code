@@ -20,11 +20,13 @@ export interface NormalizedAzureDevOpsPullRequestRecord {
 }
 
 const AzureDevOpsRepositoryIdentitySchema = Schema.Struct({
-  name: Schema.optional(Schema.String),
+  name: Schema.optional(Schema.NullOr(Schema.String)),
   project: Schema.optional(
-    Schema.Struct({
-      name: Schema.optional(Schema.String),
-    }),
+    Schema.NullOr(
+      Schema.Struct({
+        name: Schema.optional(Schema.NullOr(Schema.String)),
+      }),
+    ),
   ),
 });
 
@@ -41,8 +43,8 @@ const AzureDevOpsPullRequestSchema = Schema.Struct({
   forkSource: Schema.optional(
     Schema.NullOr(
       Schema.Struct({
-        name: Schema.optional(Schema.String),
-        repository: Schema.optional(AzureDevOpsRepositoryIdentitySchema),
+        name: Schema.optional(Schema.NullOr(Schema.String)),
+        repository: Schema.optional(Schema.NullOr(AzureDevOpsRepositoryIdentitySchema)),
       }),
     ),
   ),
