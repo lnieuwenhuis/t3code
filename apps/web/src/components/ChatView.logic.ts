@@ -407,6 +407,23 @@ export function mergeComposerDraftPromptWithPendingAnswer(
 }
 
 /**
+ * Resolves the draft update when typed pending-question text leaves its answer
+ * slot. A null result means there is no text to return, so the caller must
+ * preserve both the persisted draft and any carried-draft bookkeeping.
+ */
+export function resolveComposerDraftPromptAfterReturningPendingAnswer(input: {
+  draftPrompt: string;
+  carriedDraftPrompt: string | null;
+  pendingCustomAnswer: string;
+}): string | null {
+  const existingDraftPrompt =
+    input.carriedDraftPrompt !== null && input.draftPrompt === input.carriedDraftPrompt
+      ? ""
+      : input.draftPrompt;
+  return mergeComposerDraftPromptWithPendingAnswer(existingDraftPrompt, input.pendingCustomAnswer);
+}
+
+/**
  * A question that has just arrived takes over the composer, which would hide
  * whatever the user was typing until the question resolves (issue #8963).
  * Returns the draft text to carry into the request's first question as its

@@ -378,8 +378,8 @@ import {
   deriveLockedProvider,
   readFileAsDataUrl,
   collectPendingUserInputCustomAnswers,
-  mergeComposerDraftPromptWithPendingAnswer,
   type PendingUserInputRequestSnapshot,
+  resolveComposerDraftPromptAfterReturningPendingAnswer,
   resolveComposerDraftToCarryIntoPendingUserInput,
   shouldRescueCancelledPendingUserInput,
   resolveFileAttachmentUrl,
@@ -2594,13 +2594,17 @@ function ChatViewContent(props: ChatViewProps) {
   const returnTextToComposerDraft = useCallback(
     (requestId: string, text: string, draftTarget: ScopedThreadRef | DraftId) => {
       const carried = carriedComposerDraftByRequestIdRef.current.get(requestId);
-      carriedComposerDraftByRequestIdRef.current.delete(requestId);
       const draftPrompt =
         useComposerDraftStore.getState().getComposerDraft(draftTarget)?.prompt ?? "";
-      const existingDraftPrompt =
-        carried?.draftTarget === draftTarget && draftPrompt === carried.text ? "" : draftPrompt;
-      const nextDraftPrompt =
-        mergeComposerDraftPromptWithPendingAnswer(existingDraftPrompt, text) ?? existingDraftPrompt;
+      const nextDraftPrompt = resolveComposerDraftPromptAfterReturningPendingAnswer({
+        draftPrompt,
+        carriedDraftPrompt: carried?.draftTarget === draftTarget ? carried.text : null,
+        pendingCustomAnswer: text,
+      });
+      if (nextDraftPrompt === null) {
+        return;
+      }
+      carriedComposerDraftByRequestIdRef.current.delete(requestId);
       if (nextDraftPrompt !== draftPrompt) {
         setComposerDraftPrompt(draftTarget, nextDraftPrompt);
       }

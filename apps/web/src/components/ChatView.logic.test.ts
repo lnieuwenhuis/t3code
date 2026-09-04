@@ -37,6 +37,7 @@ import {
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
   mergeComposerDraftPromptWithPendingAnswer,
+  resolveComposerDraftPromptAfterReturningPendingAnswer,
   resolveBackgroundDraftWorkspaceOptions,
   collectPendingUserInputCustomAnswers,
   resolveComposerDraftToCarryIntoPendingUserInput,
@@ -807,6 +808,18 @@ describe("mergeComposerDraftPromptWithPendingAnswer", () => {
     expect(mergeComposerDraftPromptWithPendingAnswer("older unsent note", "")).toBeNull();
     expect(mergeComposerDraftPromptWithPendingAnswer("older unsent note", "   ")).toBeNull();
     expect(mergeComposerDraftPromptWithPendingAnswer("", "")).toBeNull();
+  });
+});
+
+describe("resolveComposerDraftPromptAfterReturningPendingAnswer", () => {
+  it("preserves the carried draft when an option replaces an empty custom answer", () => {
+    expect(
+      resolveComposerDraftPromptAfterReturningPendingAnswer({
+        draftPrompt: "original composer text",
+        carriedDraftPrompt: "original composer text",
+        pendingCustomAnswer: "",
+      }),
+    ).toBeNull();
   });
 });
 
