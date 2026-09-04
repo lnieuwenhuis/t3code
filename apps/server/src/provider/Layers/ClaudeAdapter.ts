@@ -1006,6 +1006,13 @@ function trimmedString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function runtimeModelFromAssistantSnapshot(value: unknown): string | undefined {
+  const model = trimmedString(value);
+  // Claude uses this sentinel for locally generated error frames; no model
+  // served it, so it must not replace a task's last known runtime model.
+  return model === "<synthetic>" ? undefined : model;
+}
+
 /**
  * SDK task usage ({total_tokens, tool_uses, duration_ms}, sometimes with
  * input/output/cache breakdowns) → the typed contract shape. Unknown or
@@ -2945,7 +2952,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       // ran with. It can arrive before task_started or after the terminal task
       // rows, so retain early values and emit late corrections.
       const owningTaskId = agentIdForParentToolUse(context.taskAgents, assistantParentToolUseId);
-      const snapshotModel = trimmedString(message.message.model);
+      const snapshotModel = runtimeModelFromAssistantSnapshot(message.message.model);
       const owningAgent = owningTaskId ? context.taskAgents.get(owningTaskId) : undefined;
       if (owningAgent) {
         const changed = snapshotModel
@@ -3305,7 +3312,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
               (tool) => tool.itemId === message.tool_use_id,
             )
           : undefined;
-        const owningAgentId = launchingTool?.agentId;
+        const existingAgent = context.taskAgents.get(message.task_id);
+        const owningAgentId = existingAgent?.owningAgentId ?? launchingTool?.agentId;
         // Only explicit Agent tool overrides are safe to seed. File-defined
         // agents resolve model/effort from their own frontmatter, so falling
         // back to the parent session silently misattributes their work.
@@ -3323,25 +3331,36 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         if (message.tool_use_id) {
           context.pendingTaskAgentRefinements.delete(message.tool_use_id);
         }
-        const model = pendingRefinement?.model ?? trimmedString(launchInput?.model);
+        const model =
+          pendingRefinement?.model ?? existingAgent?.model ?? trimmedString(launchInput?.model);
         const rawLaunchEffort = launchInput?.effort;
         const effort =
           pendingRefinement?.effort ??
+          existingAgent?.effort ??
           trimmedString(rawLaunchEffort) ??
           (typeof rawLaunchEffort === "number" && Number.isFinite(rawLaunchEffort)
             ? String(rawLaunchEffort)
             : undefined);
+        // A SendMessage resume re-emits task_started for the same task id with
+        // the resume tool's id. Keep the original Agent launch association:
+        // subagent assistant snapshots continue to reference that original id.
+        const toolUseId = existingAgent?.toolUseId ?? message.tool_use_id;
+        const description = message.description || existingAgent?.description;
+        const subagentType = message.subagent_type ?? existingAgent?.subagentType;
+        const taskType = message.task_type ?? existingAgent?.taskType;
+        const workflowName = message.workflow_name ?? existingAgent?.workflowName;
         // Remember the agent identity so every later task.* payload for this
         // taskId is self-describing (identity must survive activity retention).
         context.taskAgents.set(message.task_id, {
           taskId: message.task_id,
-          toolUseId: message.tool_use_id,
-          description: message.description,
-          subagentType: message.subagent_type,
-          taskType: message.task_type,
-          workflowName: message.workflow_name,
-          skipTranscript: message.skip_transcript === true,
-          runHandles: context.taskAgents.get(message.task_id)?.runHandles,
+          toolUseId,
+          description,
+          subagentType,
+          taskType,
+          workflowName,
+          skipTranscript:
+            message.skip_transcript === true || existingAgent?.skipTranscript === true,
+          runHandles: existingAgent?.runHandles,
           owningAgentId,
           model,
           effort,
@@ -3353,14 +3372,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           payload: {
             taskId: RuntimeTaskId.make(message.task_id),
             description: message.description,
-            ...(message.task_type ? { taskType: message.task_type } : {}),
+            ...(taskType ? { taskType } : {}),
             ...(owningAgentId ? { agentId: owningAgentId } : {}),
-            ...(message.description ? { title: message.description } : {}),
-            ...(message.subagent_type ? { role: message.subagent_type } : {}),
+            ...(description ? { title: description } : {}),
+            ...(subagentType ? { role: subagentType } : {}),
             ...(model ? { model } : {}),
             ...(effort ? { effort } : {}),
-            ...(message.tool_use_id ? { toolUseId: message.tool_use_id } : {}),
-            ...(message.workflow_name ? { workflowName: message.workflow_name } : {}),
+            ...(toolUseId ? { toolUseId } : {}),
+            ...(workflowName ? { workflowName } : {}),
           },
         });
         return;

@@ -2619,6 +2619,193 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("preserves subagent attribution when task_started repeats for a resume", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const taskEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type.startsWith("task.")),
+        Stream.takeUntil((event) => event.type === "task.progress"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "spawn an agent",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-resumed",
+        description: "Agent R",
+        task_type: "local_agent",
+        tool_use_id: "toolu_agent_original",
+        uuid: "task-resumed-initial-uuid",
+        session_id: "sdk-session",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "assistant",
+        parent_tool_use_id: "toolu_agent_original",
+        message: {
+          model: "claude-opus-5",
+          content: [],
+        },
+        uuid: "task-resumed-model-uuid",
+        session_id: "sdk-session",
+      } as unknown as SDKMessage);
+      yield* Effect.promise(() =>
+        invokeSubagentEffortHook(harness, "SubagentStart", "task-resumed", "high"),
+      );
+
+      // Claude emits task_started again when SendMessage resumes a background
+      // agent. Its tool_use_id identifies the resume request, not the Agent
+      // launch whose id remains on the subagent's assistant snapshots.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-resumed",
+        description: "Agent R",
+        task_type: "local_agent",
+        tool_use_id: "toolu_send_message_resume",
+        uuid: "task-resumed-repeat-uuid",
+        session_id: "sdk-session",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "assistant",
+        parent_tool_use_id: "toolu_agent_original",
+        message: {
+          model: "claude-opus-5[1m]",
+          content: [],
+        },
+        uuid: "task-resumed-late-model-uuid",
+        session_id: "sdk-session",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "task_progress",
+        task_id: "task-resumed",
+        description: "Agent R",
+        usage: { total_tokens: 100, tool_uses: 1, duration_ms: 10 },
+        uuid: "task-resumed-progress-uuid",
+        session_id: "sdk-session",
+      } as unknown as SDKMessage);
+
+      const taskEvents = Array.from(yield* Fiber.join(taskEventsFiber));
+      const repeatedStart = taskEvents.filter((event) => event.type === "task.started")[1];
+      assert.equal(repeatedStart?.type, "task.started");
+      if (repeatedStart?.type === "task.started") {
+        assert.equal(repeatedStart.payload.toolUseId, "toolu_agent_original");
+        assert.equal(repeatedStart.payload.model, "claude-opus-5");
+        assert.equal(repeatedStart.payload.effort, "high");
+      }
+
+      const lateCorrection = taskEvents.find(
+        (event) => event.type === "task.updated" && event.payload.model === "claude-opus-5[1m]",
+      );
+      assert.equal(lateCorrection?.type, "task.updated");
+      const progress = taskEvents.at(-1);
+      assert.equal(progress?.type, "task.progress");
+      if (progress?.type === "task.progress") {
+        assert.equal(progress.payload.toolUseId, "toolu_agent_original");
+        assert.equal(progress.payload.model, "claude-opus-5[1m]");
+        assert.equal(progress.payload.effort, "high");
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("ignores synthetic error models when refining subagent attribution", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const taskEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type.startsWith("task.")),
+        Stream.takeUntil((event) => event.type === "task.progress"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "spawn an agent",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-synthetic-model",
+        description: "Agent S",
+        task_type: "local_agent",
+        tool_use_id: "toolu_agent_synthetic",
+        uuid: "task-synthetic-model-uuid",
+        session_id: "sdk-session",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "assistant",
+        parent_tool_use_id: "toolu_agent_synthetic",
+        message: {
+          model: "claude-opus-5",
+          content: [],
+        },
+        uuid: "task-real-model-uuid",
+        session_id: "sdk-session",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "assistant",
+        parent_tool_use_id: "toolu_agent_synthetic",
+        error: "server_error",
+        message: {
+          model: "<synthetic>",
+          content: [],
+        },
+        uuid: "task-synthetic-error-uuid",
+        session_id: "sdk-session",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "task_progress",
+        task_id: "task-synthetic-model",
+        description: "Agent S",
+        usage: { total_tokens: 100, tool_uses: 1, duration_ms: 10 },
+        uuid: "task-synthetic-progress-uuid",
+        session_id: "sdk-session",
+      } as unknown as SDKMessage);
+
+      const taskEvents = Array.from(yield* Fiber.join(taskEventsFiber));
+      assert.isFalse(
+        taskEvents.some((event) =>
+          "model" in event.payload ? event.payload.model === "<synthetic>" : false,
+        ),
+      );
+      const progress = taskEvents.at(-1);
+      assert.equal(progress?.type, "task.progress");
+      if (progress?.type === "task.progress") {
+        assert.equal(progress.payload.model, "claude-opus-5");
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("keeps explicit Agent tool model and effort overrides", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
