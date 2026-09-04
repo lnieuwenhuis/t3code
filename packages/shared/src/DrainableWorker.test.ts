@@ -93,6 +93,85 @@ describe("makeKeyedDrainableWorker", () => {
     ),
   );
 
+  it.live("drains work offered during drain, including new keys and follow-ups", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const processed: string[] = [];
+        const a1Started = yield* Deferred.make<void>();
+        const releaseA1 = yield* Deferred.make<void>();
+        const b1Started = yield* Deferred.make<void>();
+        const releaseB1 = yield* Deferred.make<void>();
+        const c1Started = yield* Deferred.make<void>();
+        const releaseC1 = yield* Deferred.make<void>();
+        const worker = yield* makeKeyedDrainableWorker(
+          (item: { readonly key: string; readonly value: string }) => item.key,
+          (item) =>
+            Effect.gen(function* () {
+              if (item.value === "a1") {
+                yield* Deferred.succeed(a1Started, undefined);
+                yield* Deferred.await(releaseA1);
+              }
+              if (item.value === "b1") {
+                yield* Deferred.succeed(b1Started, undefined);
+                yield* Deferred.await(releaseB1);
+              }
+              if (item.value === "c1") {
+                yield* Deferred.succeed(c1Started, undefined);
+                yield* Deferred.await(releaseC1);
+              }
+              processed.push(item.value);
+            }),
+        );
+
+        yield* worker.enqueue({ key: "a", value: "a1" });
+        yield* worker.enqueue({ key: "b", value: "b1" });
+        yield* Deferred.await(a1Started);
+        yield* Deferred.await(b1Started);
+
+        const drained = yield* Deferred.make<void>();
+        yield* Effect.forkChild(
+          worker.drain.pipe(
+            Effect.tap(() => Deferred.succeed(drained, undefined).pipe(Effect.orDie)),
+          ),
+        );
+
+        // Let the forked drain snapshot lanes [a, b]: no other work can be
+        // enqueued while this fiber only yields, so after ample scheduler
+        // turns the drain is parked waiting on the blocked a1/b1 lanes.
+        // (Scheduler turns only — no wall-clock.)
+        for (let i = 0; i < 50; i++) {
+          yield* Effect.yieldNow;
+        }
+
+        // Offer a follow-up on existing lane "a" (a1 still blocked, so the
+        // lane entry is stable and cannot be cleaned up mid-race) plus a
+        // brand-new blocked key "c" — both strictly after the snapshot.
+        // A snapshot-only drain never waits on "c", so it settles once
+        // a/b release while c1 is still pending.
+        yield* worker.enqueue({ key: "a", value: "a2" });
+        yield* worker.enqueue({ key: "c", value: "c1" });
+        yield* Deferred.await(c1Started);
+        expect(yield* Deferred.isDone(drained)).toBe(false);
+
+        // Releasing a/b must not settle the drain while c1 is pending.
+        yield* Deferred.succeed(releaseA1, undefined);
+        yield* Deferred.succeed(releaseB1, undefined);
+        // Give the drain ample scheduler turns to (incorrectly) settle: the
+        // quiescent drain stays pending regardless of turns taken since c1
+        // is still blocked.
+        for (let i = 0; i < 50; i++) {
+          yield* Effect.yieldNow;
+        }
+        expect(processed).not.toContain("c1");
+        expect(yield* Deferred.isDone(drained)).toBe(false);
+
+        yield* Deferred.succeed(releaseC1, undefined);
+        yield* Deferred.await(drained);
+        expect(processed.toSorted()).toEqual(["a1", "a2", "b1", "c1"]);
+      }),
+    ),
+  );
+
   it.live("creates a single lane under concurrent same-key enqueues", () =>
     Effect.scoped(
       Effect.gen(function* () {

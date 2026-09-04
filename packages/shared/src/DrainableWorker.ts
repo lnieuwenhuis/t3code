@@ -40,7 +40,9 @@ export interface DrainableWorker<A> {
  * across lanes.
  *
  * Each key gets its own FIFO lane while different keys process concurrently.
- * `drain` waits for every lane present when draining starts. Idle lanes are
+ * `drain` is quiescent: it loops snapshot+drain until no lane holds
+ * unprocessed work offered during the drain (new keys, recreated lanes, or
+ * version-bumped lanes). Idle lanes are
  * removed once drained so key cardinality stays bounded.
  *
  * @param keyOf - Derives the lane key for an item.
@@ -111,16 +113,47 @@ export const makeKeyedDrainableWorker = <A, K, E, R>(
         }),
       );
 
-    const drain: DrainableWorker<A>["drain"] = laneLock
-      .withPermit(Effect.sync(() => Array.from(entries.values())))
-      .pipe(
-        Effect.flatMap((lanes) =>
-          Effect.forEach(lanes, (entry) => entry.worker.drain, {
-            concurrency: "unbounded",
-            discard: true,
+    const drain: DrainableWorker<A>["drain"] = Effect.gen(function* () {
+      while (true) {
+        const snapshot = yield* laneLock.withPermit(
+          Effect.sync(() =>
+            Array.from(entries.entries()).map(([key, entry]) => ({
+              key,
+              entry,
+              version: entry.version,
+            })),
+          ),
+        );
+        if (snapshot.length === 0) {
+          return;
+        }
+        yield* Effect.forEach(snapshot, ({ entry }) => entry.worker.drain, {
+          concurrency: "unbounded",
+          discard: true,
+        });
+        const settled = yield* laneLock.withPermit(
+          Effect.sync(() => {
+            const seen = new Map<K, { readonly entry: Entry; readonly version: number }>();
+            for (const { key, entry, version } of snapshot) {
+              seen.set(key, { entry, version });
+            }
+            for (const [key, current] of entries) {
+              const prior = seen.get(key);
+              if (prior === undefined) {
+                return false;
+              }
+              if (current !== prior.entry || current.version !== prior.version) {
+                return false;
+              }
+            }
+            return true;
           }),
-        ),
-      );
+        );
+        if (settled) {
+          return;
+        }
+      }
+    });
 
     return { enqueue, drain } satisfies DrainableWorker<A>;
   });
