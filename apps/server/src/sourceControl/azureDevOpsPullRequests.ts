@@ -15,7 +15,18 @@ export interface NormalizedAzureDevOpsPullRequestRecord {
   readonly headRefName: string;
   readonly state: "open" | "closed" | "merged";
   readonly updatedAt: Option.Option<DateTime.Utc>;
+  readonly isCrossRepository: boolean;
+  readonly headRepositoryNameWithOwner?: string;
 }
+
+const AzureDevOpsRepositoryIdentitySchema = Schema.Struct({
+  name: Schema.optional(Schema.String),
+  project: Schema.optional(
+    Schema.Struct({
+      name: Schema.optional(Schema.String),
+    }),
+  ),
+});
 
 const AzureDevOpsPullRequestSchema = Schema.Struct({
   pullRequestId: PositiveInt,
@@ -23,14 +34,17 @@ const AzureDevOpsPullRequestSchema = Schema.Struct({
   url: Schema.optional(Schema.String),
   repository: Schema.optional(
     Schema.Struct({
-      name: Schema.optional(Schema.String),
+      ...AzureDevOpsRepositoryIdentitySchema.fields,
       webUrl: Schema.optional(Schema.String),
-      project: Schema.optional(
-        Schema.Struct({
-          name: Schema.optional(Schema.String),
-        }),
-      ),
     }),
+  ),
+  forkSource: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        name: Schema.optional(Schema.String),
+        repository: Schema.optional(AzureDevOpsRepositoryIdentitySchema),
+      }),
+    ),
   ),
   sourceRefName: TrimmedNonEmptyString,
   targetRefName: TrimmedNonEmptyString,
@@ -161,16 +175,24 @@ function normalizeAzureDevOpsPullRequestUrl(
 function normalizeAzureDevOpsPullRequestRecord(
   raw: Schema.Schema.Type<typeof AzureDevOpsPullRequestSchema>,
 ): NormalizedAzureDevOpsPullRequestRecord {
+  const forkSource = raw.forkSource ?? undefined;
+  const forkProjectName = trimOptionalString(forkSource?.repository?.project?.name);
+  const forkRepositoryName = trimOptionalString(forkSource?.repository?.name);
+  const headRepositoryNameWithOwner =
+    forkProjectName && forkRepositoryName ? `${forkProjectName}/${forkRepositoryName}` : null;
+
   return {
     number: raw.pullRequestId,
     title: raw.title,
     url: normalizeAzureDevOpsPullRequestUrl(raw),
     baseRefName: normalizeRefName(raw.targetRefName),
-    headRefName: normalizeRefName(raw.sourceRefName),
+    headRefName: normalizeRefName(trimOptionalString(forkSource?.name) ?? raw.sourceRefName),
     state: normalizeAzureDevOpsPullRequestState(raw.status),
     updatedAt: (raw.closedDate ?? Option.none()).pipe(
       Option.orElse(() => raw.creationDate ?? Option.none()),
     ),
+    isCrossRepository: forkSource !== undefined,
+    ...(headRepositoryNameWithOwner ? { headRepositoryNameWithOwner } : {}),
   };
 }
 
