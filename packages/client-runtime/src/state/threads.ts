@@ -22,6 +22,7 @@ import { EnvironmentRegistry } from "../connection/registry.ts";
 import { connectionProjectionPhase } from "../connection/model.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import * as ConnectionWakeups from "../connection/wakeups.ts";
+import { wasSubscribeThreadNotFound } from "../errors/orchestration.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
 import { subscribeDynamic } from "../rpc/client.ts";
 import { ThreadSnapshotLoader, type ThreadSnapshotWindow } from "./threadSnapshotHttp.ts";
@@ -258,10 +259,19 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     readonly epoch: number;
   } | null>(null);
   const persistence = yield* Queue.sliding<OrchestrationThreadDetailSnapshot>(1);
+  // Latch set when the server reports the thread missing (subscribe fails
+  // with threadDisposition "not-found"). Gates the outer foreground/probe
+  // resubscribe path below so a deleted thread stops after its single
+  // terminal attempt instead of retrying on every app wakeup.
+  const terminalNotFound = yield* Ref.make(false);
 
   const persist = Effect.fn("EnvironmentThreadState.persist")(function* (
     snapshot: OrchestrationThreadDetailSnapshot,
   ) {
+    // A debounced write racing a deletion must not resurrect the cache after
+    // setDeleted removes it; the queue drain in setDeleted drops pending
+    // offers, this guard drops the offer already past the debounce.
+    if ((yield* SubscriptionRef.get(state)).status === "deleted") return;
     if (resumeCache !== undefined && resumeCache.owner !== owner) return;
     if (
       committed.persisted &&
@@ -394,6 +404,10 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       page: Option.none(),
     });
     yield* remember;
+    // Drop the queued cache write before removing the entry so a debounced
+    // snapshot cannot re-save the thread after deletion. The queue is
+    // sliding(1), so a single poll discards the whole backlog.
+    yield* Queue.poll(persistence);
     if (resumeCache !== undefined && resumeCache.owner !== owner) return;
     yield* cache.removeThread(environmentId, threadId).pipe(
       Effect.catch((error) =>
@@ -644,7 +658,12 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   const foregroundResubscriptions = Option.match(wakeups, {
     onNone: () => Stream.never,
     onSome: (service) =>
-      service.changes.pipe(Stream.filter(ConnectionWakeups.shouldResubscribeAfterWakeup)),
+      service.changes.pipe(
+        Stream.filter(ConnectionWakeups.shouldResubscribeAfterWakeup),
+        Stream.filterEffect(() =>
+          Ref.get(terminalNotFound).pipe(Effect.map((missing) => !missing)),
+        ),
+      ),
   });
 
   yield* setSynchronizing;
@@ -742,6 +761,19 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         onExpectedFailure: setStreamError,
         retryExpectedFailureAfter: "250 millis",
         resubscribe: foregroundResubscriptions,
+        terminalFailure: {
+          matches: wasSubscribeThreadNotFound,
+          handle: (cause) =>
+            Ref.set(terminalNotFound, true).pipe(
+              Effect.andThen(
+                Effect.logWarning("Subscribed thread is gone; stopping.", {
+                  threadId,
+                  cause: Cause.pretty(cause),
+                }),
+              ),
+              Effect.andThen(setDeleted()),
+            ),
+        },
       },
     ).pipe(Stream.runForEach(applyItem)),
   );
@@ -816,10 +848,12 @@ export function createEnvironmentThreadStateAtoms<R, E>(
   // Cache definitions must outlive collectible live-atom definitions. The
   // registry retains these nodes without retaining environment or RPC scopes.
   const resumeFamily = Atom.family((key: string) =>
-    Atom.make((): ThreadResumeCache => ({
-      snapshot: undefined,
-      owner: undefined,
-    })).pipe(
+    Atom.make(
+      (): ThreadResumeCache => ({
+        snapshot: undefined,
+        owner: undefined,
+      }),
+    ).pipe(
       Atom.setIdleTTL(THREAD_SNAPSHOT_IDLE_TTL_MS),
       Atom.withLabel(`environment-thread-resume:${key}`),
     ),

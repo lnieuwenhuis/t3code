@@ -1,6 +1,7 @@
 import {
   EnvironmentId,
   EventId,
+  OrchestrationGetSnapshotError,
   ORCHESTRATION_WS_METHODS,
   ProjectId,
   ProviderInstanceId,
@@ -986,6 +987,128 @@ describe("EnvironmentThreads", () => {
         yield* Effect.yieldNow;
       }
       expect(yield* Ref.get(harness.subscriptionCount)).toBe(3);
+    }),
+  );
+
+  it.effect("marks the thread deleted and stops subscribing when the thread is missing", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      yield* Queue.offer(
+        harness.inputs,
+        new OrchestrationGetSnapshotError({
+          message: `Thread ${THREAD_ID} was not found`,
+          cause: THREAD_ID,
+          threadDisposition: "not-found",
+        }),
+      );
+
+      const state = yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "deleted",
+      );
+      expect(Option.isNone(state.data)).toBe(true);
+      expect(Option.isNone(state.error)).toBe(true);
+      // Deletion parity with the normal thread.deleted event path.
+      expect(yield* Ref.get(harness.removedThreads)).toEqual([THREAD_ID]);
+
+      // No retry storm: far past any retry delay there is exactly one
+      // subscribe attempt for a deleted thread.
+      yield* TestClock.adjust("30 seconds");
+      yield* Effect.yieldNow;
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(1);
+    }),
+  );
+
+  it.effect("does not resubscribe a missing thread on foreground wakeups", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ cached: BASE_THREAD });
+      yield* Queue.offer(
+        harness.inputs,
+        new OrchestrationGetSnapshotError({
+          message: `Thread ${THREAD_ID} was not found`,
+          cause: THREAD_ID,
+          threadDisposition: "not-found",
+        }),
+      );
+      yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
+
+      // Outer resubscribe triggers (foreground, probe) must stay gated by the
+      // tombstone: the terminal attempt remains the only subscribe attempt.
+      yield* Queue.offer(harness.wakeups, "application-active");
+      yield* Queue.offer(harness.wakeups, "application-active-probe");
+      yield* TestClock.adjust("30 seconds");
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        yield* Effect.yieldNow;
+      }
+
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(1);
+      const latest = yield* Ref.get(harness.latest);
+      expect(latest.status).toBe("deleted");
+      expect(Option.isNone(latest.data)).toBe(true);
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(0);
+    }),
+  );
+
+  it.effect("does not resurrect a missing thread via queued persistence", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ cached: BASE_THREAD });
+      // Queue a debounced cache write, then delete before it flushes.
+      yield* Queue.offer(harness.inputs, snapshot(BASE_THREAD));
+      yield* Queue.offer(harness.inputs, titleUpdated("Live title", 2));
+      yield* Queue.offer(
+        harness.inputs,
+        new OrchestrationGetSnapshotError({
+          message: `Thread ${THREAD_ID} was not found`,
+          cause: THREAD_ID,
+          threadDisposition: "not-found",
+        }),
+      );
+
+      const state = yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "deleted",
+      );
+      expect(Option.isNone(state.data)).toBe(true);
+
+      // Flush far past the persistence debounce: the stale write must not
+      // re-save the thread after its cache entry was removed.
+      yield* TestClock.adjust("30 seconds");
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        yield* Effect.yieldNow;
+      }
+
+      expect(yield* Ref.get(harness.removedThreads)).toEqual([THREAD_ID]);
+      expect(yield* Ref.get(harness.savedThreads)).toEqual([]);
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(1);
+    }),
+  );
+
+  it.effect("retries a snapshot error without the not-found disposition", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      yield* Queue.offer(
+        harness.inputs,
+        new OrchestrationGetSnapshotError({
+          message: `Failed to load thread ${THREAD_ID}`,
+          cause: THREAD_ID,
+        }),
+      );
+
+      const failed = yield* awaitThreadState(harness.observed, (value) =>
+        Option.isSome(value.error),
+      );
+      expect(failed.status).not.toBe("deleted");
+      expect(Option.getOrThrow(failed.error)).toBe(`Failed to load thread ${THREAD_ID}`);
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(1);
+
+      yield* TestClock.adjust("250 millis");
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if ((yield* Ref.get(harness.subscriptionCount)) >= 2) break;
+        yield* Effect.yieldNow;
+      }
+
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(2);
+      expect(yield* Ref.get(harness.removedThreads)).toEqual([]);
     }),
   );
 });

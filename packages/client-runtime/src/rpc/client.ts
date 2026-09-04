@@ -176,6 +176,15 @@ interface SubscriptionOptions<TTag extends EnvironmentSubscriptionRpcTag> {
   ) => Effect.Effect<void, never, never>;
   readonly retryExpectedFailureAfter?: Duration.Input;
   readonly resubscribe?: Stream.Stream<unknown, never, never>;
+  /**
+   * Classifies an all-Fail cause as terminal: the attempt ends for this
+   * session with no retry, after `handle` runs. Checked after transport
+   * failures and before expected-failure retry.
+   */
+  readonly terminalFailure?: {
+    readonly matches: (error: EnvironmentRpcStreamFailure<TTag>) => boolean;
+    readonly handle: (cause: Cause.Cause<EnvironmentRpcStreamFailure<TTag>>) => Effect.Effect<void>;
+  };
 }
 
 export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
@@ -232,14 +241,19 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
                       return method(input).pipe(
                         Stream.ensuring(completeObservation),
                         Stream.catchCause((cause) => {
+                          const failErrors = cause.reasons.flatMap((reason) =>
+                            reason._tag === "Fail" ? [reason.error] : [],
+                          );
                           const hasOnlyExpectedFailures =
-                            cause.reasons.length > 0 &&
-                            cause.reasons.every((reason) => reason._tag === "Fail");
+                            cause.reasons.length > 0 && failErrors.length === cause.reasons.length;
                           const isTransportFailure =
                             hasOnlyExpectedFailures &&
-                            cause.reasons.every(
-                              (reason) => reason._tag === "Fail" && isRpcClientError(reason.error),
-                            );
+                            failErrors.every((error) => isRpcClientError(error));
+                          const terminal = options?.terminalFailure;
+                          const isTerminal =
+                            hasOnlyExpectedFailures &&
+                            terminal !== undefined &&
+                            failErrors.every((error) => terminal.matches(error));
                           if (isTransportFailure) {
                             return Stream.fromEffect(
                               Effect.logWarning(
@@ -251,6 +265,9 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
                                 },
                               ),
                             ).pipe(Stream.drain);
+                          }
+                          if (isTerminal && terminal !== undefined) {
+                            return Stream.fromEffect(terminal.handle(cause)).pipe(Stream.drain);
                           }
                           if (hasOnlyExpectedFailures && options?.onExpectedFailure !== undefined) {
                             const handled = Stream.fromEffect(

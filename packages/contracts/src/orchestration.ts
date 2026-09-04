@@ -1852,6 +1852,7 @@ export class OrchestrationGetSnapshotError extends Schema.TaggedErrorClass<Orche
   {
     message: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
+    threadDisposition: Schema.optional(Schema.Literal("not-found")),
   },
 ) {}
 
