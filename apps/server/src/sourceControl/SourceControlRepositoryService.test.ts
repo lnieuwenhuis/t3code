@@ -211,6 +211,12 @@ it.effect("returns actionable, transport-safe clone failures", () => {
     },
     {
       stderr:
+        "git@ssh.dev.azure.com: Public key authentication failed.\nfatal: Could not read from remote repository.\n",
+      expected:
+        "SSH authentication failed. Add an SSH key to your source control account and try again.",
+    },
+    {
+      stderr:
         "fatal: could not read Username for 'https://example.com': terminal prompts disabled\n",
       expected:
         "HTTPS authentication failed. Configure Git credentials for the source control host and try again.",
@@ -220,6 +226,12 @@ it.effect("returns actionable, transport-safe clone failures", () => {
         "ssh: Could not resolve hostname example.com: nodename nor servname provided\nfatal: Could not read from remote repository.\n",
       expected:
         "The source control host could not be resolved. Check your network or VPN connection and try again.",
+    },
+    {
+      stderr:
+        "ssh: connect to host github.com port 22: Operation timed out\nfatal: Could not read from remote repository.\n",
+      expected:
+        "Git could not connect to the source control host. Check your network or VPN connection and try again.",
     },
     {
       stderr: "fatal: an unrecognized clone failure\n",
@@ -246,7 +258,7 @@ it.effect("returns actionable, transport-safe clone failures", () => {
       assert.strictEqual(error.provider, "github");
       assert.strictEqual(error.detail, expected);
       assert.instanceOf(error.cause, GitCommandError);
-      assert.strictEqual(error.cause.detail, expected);
+      assert.strictEqual(error.cause.detail, "git clone exited with a non-zero status.");
       assert.strictEqual(error.cause.stderrLength, stderr.length);
     }).pipe(
       Effect.provide(

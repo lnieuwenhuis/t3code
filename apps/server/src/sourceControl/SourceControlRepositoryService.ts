@@ -19,7 +19,10 @@ import {
   type SourceControlRepositoryLookupInput,
 } from "@t3tools/contracts";
 
-import { detectSourceControlProviderFromRemoteUrl } from "@t3tools/shared/sourceControl";
+import {
+  detectSourceControlProviderFromRemoteUrl,
+  isSshRemoteUrl,
+} from "@t3tools/shared/sourceControl";
 
 import { ServerConfig } from "../config.ts";
 import { expandHomePathWith } from "../pathExpansion.ts";
@@ -27,24 +30,30 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as SourceControlProviderRegistry from "./SourceControlProviderRegistry.ts";
 const isSourceControlRepositoryError = Schema.is(SourceControlRepositoryError);
 
-function cloneFailureDetail(stderr: string): string {
+function cloneFailureDetail(stderr: string, remoteUrl?: string | null): string {
   if (/host key verification failed/iu.test(stderr)) {
     return "SSH could not verify the source control host. Add its host key to known_hosts and try again.";
   }
-  if (/permission denied \(publickey(?:,[^)]+)?\)/iu.test(stderr)) {
+  if (
+    /permission denied \(publickey(?:,[^)]+)?\)|public key authentication failed/iu.test(stderr)
+  ) {
     return "SSH authentication failed. Add an SSH key to your source control account and try again.";
   }
   if (
-    /authentication failed|http basic: access denied|could not read username|terminal prompts disabled/iu.test(
-      stderr,
-    )
+    /http basic: access denied|could not read username|terminal prompts disabled/iu.test(stderr)
   ) {
+    return "HTTPS authentication failed. Configure Git credentials for the source control host and try again.";
+  }
+  if (/authentication failed/iu.test(stderr)) {
+    if (remoteUrl && isSshRemoteUrl(remoteUrl)) {
+      return "SSH authentication failed. Add an SSH key to your source control account and try again.";
+    }
     return "HTTPS authentication failed. Configure Git credentials for the source control host and try again.";
   }
   if (/could not resolve (?:host|hostname)/iu.test(stderr)) {
     return "The source control host could not be resolved. Check your network or VPN connection and try again.";
   }
-  if (/connection (?:timed out|refused)|failed to connect/iu.test(stderr)) {
+  if (/connection (?:timed out|refused)|operation timed out|failed to connect/iu.test(stderr)) {
     return "Git could not connect to the source control host. Check your network or VPN connection and try again.";
   }
   if (/repository not found|could not read from remote repository/iu.test(stderr)) {
@@ -236,7 +245,7 @@ export const make = Effect.gen(function* () {
     });
 
     if (cloneResult.exitCode !== 0) {
-      const detail = cloneFailureDetail(cloneResult.stderr);
+      const detail = cloneFailureDetail(cloneResult.stderr, remoteUrl);
       return yield* new SourceControlRepositoryError({
         operation: "cloneRepository",
         provider,
@@ -249,7 +258,7 @@ export const make = Effect.gen(function* () {
           exitCode: cloneResult.exitCode,
           stdoutLength: cloneResult.stdout.length,
           stderrLength: cloneResult.stderr.length,
-          detail,
+          detail: "git clone exited with a non-zero status.",
         }),
       });
     }
