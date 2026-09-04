@@ -3228,6 +3228,68 @@ it.effect("answers a known pull request immediately while the host refreshes", (
   }),
 );
 
+it.effect("an invalidated detail read sees an external change a plain re-read holds back", () =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<void>();
+    let calls = 0;
+    let hostTitle = "old title";
+    let hostChecks: ReadonlyArray<{ readonly name: string; readonly status: "success" }> = [];
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequest: () =>
+            Effect.gen(function* () {
+              calls += 1;
+              // The plain re-read's background refresh stalls here, so the hold stays old
+              // while the invalidated poll read runs past it.
+              if (calls === 2) yield* Deferred.await(gate);
+              return {
+                ...hostedChangeRequest("polled body", 4),
+                title: hostTitle,
+                checks: hostChecks.map((check) => ({
+                  name: check.name,
+                  status: check.status,
+                  description: null,
+                  url: null,
+                })),
+              };
+            }),
+        }),
+      ],
+    });
+
+    const first = yield* service.detail(reference);
+    assert.strictEqual(first.title, "old title");
+    assert.deepStrictEqual(first.checks, []);
+
+    hostTitle = "new title";
+    hostChecks = [{ name: "ci", status: "success" }];
+    yield* TestClock.adjust("16 seconds");
+
+    // The old poll path: a plain re-read answers from the hold while refreshing behind it.
+    const second = yield* service.detail(reference);
+    assert.strictEqual(second.title, "old title");
+    assert.deepStrictEqual(second.checks, []);
+    yield* Effect.yieldNow;
+    assert.strictEqual(calls, 2);
+
+    // The poll path the panel now takes: invalidate first so the re-read misses the hold,
+    // even with that background refresh still in flight.
+    yield* service.invalidate({ reference });
+    const polled = yield* service.detail(reference);
+    assert.strictEqual(polled.title, "new title");
+    assert.deepStrictEqual(
+      polled.checks.map((check) => check.name),
+      ["ci"],
+    );
+
+    yield* Deferred.succeed(gate, undefined);
+    yield* Effect.yieldNow;
+  }),
+);
+
 it.effect("does not ask the host again for a linked summary it already holds", () =>
   Effect.gen(function* () {
     let calls = 0;
