@@ -1,6 +1,6 @@
 import {
   OrchestrationDispatchCommandError,
-  OrchestrationGetSnapshotError,
+  OrchestrationThreadNotFoundError,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
@@ -12,9 +12,4 @@ export function wasBootstrapThreadDeleted(error: unknown): boolean {
   );
 }
 
-const isOrchestrationGetSnapshotError = Schema.is(OrchestrationGetSnapshotError);
-
-/** Set by the server when a subscribeThread miss has no snapshot (`apps/server/src/ws.ts`). */
-export function wasSubscribeThreadNotFound(error: unknown): boolean {
-  return isOrchestrationGetSnapshotError(error) && error.threadDisposition === "not-found";
-}
+export const isOrchestrationThreadNotFoundError = Schema.is(OrchestrationThreadNotFoundError);

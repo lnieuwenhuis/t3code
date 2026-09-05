@@ -2,6 +2,7 @@ import {
   EnvironmentId,
   EventId,
   OrchestrationGetSnapshotError,
+  OrchestrationThreadNotFoundError,
   ORCHESTRATION_WS_METHODS,
   ProjectId,
   ProviderInstanceId,
@@ -998,11 +999,7 @@ describe("EnvironmentThreads", () => {
       const harness = yield* makeHarness();
       yield* Queue.offer(
         harness.inputs,
-        new OrchestrationGetSnapshotError({
-          message: `Thread ${THREAD_ID} was not found`,
-          cause: THREAD_ID,
-          threadDisposition: "not-found",
-        }),
+        new OrchestrationThreadNotFoundError({ threadId: THREAD_ID }),
       );
 
       const state = yield* awaitThreadState(
@@ -1027,11 +1024,7 @@ describe("EnvironmentThreads", () => {
       const harness = yield* makeHarness({ cached: BASE_THREAD });
       yield* Queue.offer(
         harness.inputs,
-        new OrchestrationGetSnapshotError({
-          message: `Thread ${THREAD_ID} was not found`,
-          cause: THREAD_ID,
-          threadDisposition: "not-found",
-        }),
+        new OrchestrationThreadNotFoundError({ threadId: THREAD_ID }),
       );
       yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
 
@@ -1057,11 +1050,7 @@ describe("EnvironmentThreads", () => {
       const harness = yield* makeHarness({ cached: BASE_THREAD });
       yield* Queue.offer(
         harness.inputs,
-        new OrchestrationGetSnapshotError({
-          message: `Thread ${THREAD_ID} was not found`,
-          cause: THREAD_ID,
-          threadDisposition: "not-found",
-        }),
+        new OrchestrationThreadNotFoundError({ threadId: THREAD_ID }),
       );
       yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
       expect(yield* Ref.get(harness.subscriptionCount)).toBe(1);
@@ -1096,11 +1085,7 @@ describe("EnvironmentThreads", () => {
       });
       yield* Queue.offer(
         harness.inputs,
-        new OrchestrationGetSnapshotError({
-          message: `Thread ${THREAD_ID} was not found`,
-          cause: THREAD_ID,
-          threadDisposition: "not-found",
-        }),
+        new OrchestrationThreadNotFoundError({ threadId: THREAD_ID }),
       );
 
       // Block the terminal handler inside its cache I/O, then replace the
@@ -1180,11 +1165,7 @@ describe("EnvironmentThreads", () => {
       yield* Queue.offer(harness.inputs, titleUpdated("Live title", 2));
       yield* Queue.offer(
         harness.inputs,
-        new OrchestrationGetSnapshotError({
-          message: `Thread ${THREAD_ID} was not found`,
-          cause: THREAD_ID,
-          threadDisposition: "not-found",
-        }),
+        new OrchestrationThreadNotFoundError({ threadId: THREAD_ID }),
       );
 
       const state = yield* awaitThreadState(
@@ -1206,7 +1187,7 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
-  it.effect("retries a snapshot error without the not-found disposition", () =>
+  it.effect("retries a generic snapshot error", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
       yield* Queue.offer(

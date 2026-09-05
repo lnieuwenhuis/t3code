@@ -1,27 +1,25 @@
 import {
   OrchestrationDispatchCommandError,
   OrchestrationGetSnapshotError,
+  OrchestrationThreadNotFoundError,
+  ThreadId,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
-import { wasBootstrapThreadDeleted, wasSubscribeThreadNotFound } from "./orchestration.ts";
+import { wasBootstrapThreadDeleted, isOrchestrationThreadNotFoundError } from "./orchestration.ts";
 
-describe("wasSubscribeThreadNotFound", () => {
+describe("isOrchestrationThreadNotFoundError", () => {
   it("matches the typed not-found error", () => {
     expect(
-      wasSubscribeThreadNotFound(
-        new OrchestrationGetSnapshotError({
-          message: "Thread thread-1 was not found",
-          cause: "thread-1",
-          threadDisposition: "not-found",
-        }),
+      isOrchestrationThreadNotFoundError(
+        new OrchestrationThreadNotFoundError({ threadId: ThreadId.make("thread-1") }),
       ),
     ).toBe(true);
   });
 
-  it("rejects a missing disposition", () => {
+  it("rejects a generic snapshot error with a matching message", () => {
     expect(
-      wasSubscribeThreadNotFound(
+      isOrchestrationThreadNotFoundError(
         new OrchestrationGetSnapshotError({
           message: "Thread thread-1 was not found",
           cause: "thread-1",
@@ -31,12 +29,14 @@ describe("wasSubscribeThreadNotFound", () => {
   });
 
   it("rejects plain errors with a matching message", () => {
-    expect(wasSubscribeThreadNotFound(new Error("Thread thread-1 was not found"))).toBe(false);
+    expect(isOrchestrationThreadNotFoundError(new Error("Thread thread-1 was not found"))).toBe(
+      false,
+    );
   });
 
   it("rejects other snapshot errors", () => {
     expect(
-      wasSubscribeThreadNotFound(
+      isOrchestrationThreadNotFoundError(
         new OrchestrationGetSnapshotError({
           message: "Failed to load thread thread-1",
           cause: "thread-1",
@@ -46,8 +46,8 @@ describe("wasSubscribeThreadNotFound", () => {
   });
 
   it("rejects unrelated errors", () => {
-    expect(wasSubscribeThreadNotFound(new Error("boom"))).toBe(false);
-    expect(wasSubscribeThreadNotFound(null)).toBe(false);
+    expect(isOrchestrationThreadNotFoundError(new Error("boom"))).toBe(false);
+    expect(isOrchestrationThreadNotFoundError(null)).toBe(false);
   });
 });
 

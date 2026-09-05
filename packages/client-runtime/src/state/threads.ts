@@ -22,7 +22,7 @@ import { EnvironmentRegistry } from "../connection/registry.ts";
 import { connectionProjectionPhase } from "../connection/model.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import * as ConnectionWakeups from "../connection/wakeups.ts";
-import { wasSubscribeThreadNotFound } from "../errors/orchestration.ts";
+import { isOrchestrationThreadNotFoundError } from "../errors/orchestration.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
 import { subscribeDynamic } from "../rpc/client.ts";
 import { ThreadSnapshotLoader, type ThreadSnapshotWindow } from "./threadSnapshotHttp.ts";
@@ -260,7 +260,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   } | null>(null);
   const persistence = yield* Queue.sliding<OrchestrationThreadDetailSnapshot>(1);
   // Latch set when the server reports the thread missing (subscribe fails
-  // with threadDisposition "not-found"). Gates the outer foreground/probe
+  // with OrchestrationThreadNotFoundError). Gates the outer foreground/probe
   // resubscribe path below so a deleted thread stops after its single
   // terminal attempt instead of retrying on every app wakeup.
   const terminalNotFound = yield* Ref.make(false);
@@ -762,7 +762,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         retryExpectedFailureAfter: "250 millis",
         resubscribe: foregroundResubscriptions,
         terminalFailure: {
-          matches: wasSubscribeThreadNotFound,
+          matches: isOrchestrationThreadNotFoundError,
           handle: (cause) =>
             Ref.set(terminalNotFound, true).pipe(
               Effect.andThen(
