@@ -1157,6 +1157,46 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
+  for (const deletion of ["event", "not-found"] as const) {
+    it.effect(`waits for an in-flight cache save before ${deletion} removal`, () =>
+      Effect.gen(function* () {
+        const writing = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const written = yield* Deferred.make<void>();
+        const removed = yield* Deferred.make<void>();
+        const cached = yield* Ref.make(false);
+        const harness = yield* makeHarness({
+          saveThread: () =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(writing, undefined);
+              yield* Deferred.await(release);
+              yield* Ref.set(cached, true);
+              yield* Deferred.succeed(written, undefined);
+            }),
+          onRemoveThread: Ref.set(cached, false).pipe(
+            Effect.andThen(Deferred.succeed(removed, undefined)),
+            Effect.asVoid,
+          ),
+        });
+        yield* Queue.offer(harness.inputs, snapshot(BASE_THREAD));
+        yield* awaitThreadState(harness.observed, (value) => value.status === "live");
+        yield* TestClock.adjust("500 millis");
+        yield* Deferred.await(writing);
+        yield* Queue.offer(
+          harness.inputs,
+          deletion === "event"
+            ? deleted()
+            : new OrchestrationThreadNotFoundError({ threadId: THREAD_ID }),
+        );
+        yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
+        yield* Deferred.succeed(release, undefined);
+        yield* Deferred.await(written);
+        yield* Deferred.await(removed);
+        expect(yield* Ref.get(cached)).toBe(false);
+      }),
+    );
+  }
+
   it.effect("does not resurrect a missing thread via queued persistence", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ cached: BASE_THREAD });

@@ -259,6 +259,9 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     readonly epoch: number;
   } | null>(null);
   const persistence = yield* Queue.sliding<OrchestrationThreadDetailSnapshot>(1);
+  // Cache removal must finish after any save that already passed its state
+  // check. Keep storage I/O separate from the stream/history application lock.
+  const persistenceLock = yield* Semaphore.make(1);
   // Latch set when the server reports the thread missing (subscribe fails
   // with OrchestrationThreadNotFoundError). Gates the outer foreground/probe
   // resubscribe path below so a deleted thread stops after its single
@@ -268,9 +271,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   const persist = Effect.fn("EnvironmentThreadState.persist")(function* (
     snapshot: OrchestrationThreadDetailSnapshot,
   ) {
-    // A debounced write racing a deletion must not resurrect the cache after
-    // setDeleted removes it; the queue drain in setDeleted drops pending
-    // offers, this guard drops the offer already past the debounce.
+    // Under persistenceLock, delayed writes skip deleted snapshots and
+    // deletion waits for saves that have already passed this check.
     if ((yield* SubscriptionRef.get(state)).status === "deleted") return;
     if (resumeCache !== undefined && resumeCache.owner !== owner) return;
     if (
@@ -304,7 +306,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         ),
       ),
     );
-  });
+  }, persistenceLock.withPermits(1));
 
   yield* Stream.fromQueue(persistence).pipe(
     Stream.debounce("500 millis"),
@@ -408,17 +410,21 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     // snapshot cannot re-save the thread after deletion. The queue is
     // sliding(1), so a single poll discards the whole backlog.
     yield* Queue.poll(persistence);
-    if (resumeCache !== undefined && resumeCache.owner !== owner) return;
-    yield* cache.removeThread(environmentId, threadId).pipe(
-      Effect.catch((error) =>
-        Effect.logWarning("Could not remove the cached thread.").pipe(
-          Effect.annotateLogs({
-            environmentId,
-            threadId,
-            error: error.message,
-          }),
-        ),
-      ),
+    yield* persistenceLock.withPermits(1)(
+      Effect.gen(function* () {
+        if (resumeCache !== undefined && resumeCache.owner !== owner) return;
+        yield* cache.removeThread(environmentId, threadId).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("Could not remove the cached thread.").pipe(
+              Effect.annotateLogs({
+                environmentId,
+                threadId,
+                error: error.message,
+              }),
+            ),
+          ),
+        );
+      }),
     );
   });
 
