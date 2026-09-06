@@ -52,6 +52,8 @@ function shellStatusForSnapshot(
   return Option.isSome(snapshot) ? "cached" : "empty";
 }
 
+const MAX_STREAM_ITEMS_PER_PUBLISH = 128;
+
 const SHELL_SYNCHRONIZATION_ERROR_MESSAGE = "Could not synchronize environment data.";
 
 export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")(function* () {
@@ -217,21 +219,30 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
   // the subscription's Stream.buffer: whatever accumulated while the
   // previous batch applied folds into the next one, so publication count
   // tracks how fast the client applies instead of how fast the server emits.
-  const applyItems = (
+  const applyItems = Effect.fn("EnvironmentShellState.applyItems")(function* (
     items: ReadonlyArray<DynamicSubscriptionItem<OrchestrationShellStreamItem>>,
-  ) =>
-    applyLock.withPermits(1)(
-      Effect.gen(function* () {
-        const activeGeneration = yield* Ref.get(activeSubscriptionGeneration);
-        const currentSession = Option.getOrNull(yield* SubscriptionRef.get(supervisor.session));
-        const activeItems = items
-          .filter((item) => item.session === currentSession && item.generation === activeGeneration)
-          .map((item) => item.value);
-        if (activeItems.length > 0) {
-          yield* applyItemsLocked(activeItems);
-        }
-      }),
-    );
+  ) {
+    // Release the lock and yield between slices so session changes and UI
+    // work can interleave with a backlog. Recheck identity for every slice.
+    for (let start = 0; start < items.length; start += MAX_STREAM_ITEMS_PER_PUBLISH) {
+      if (start > 0) yield* Effect.yieldNow;
+      yield* applyLock.withPermits(1)(
+        Effect.gen(function* () {
+          const activeGeneration = yield* Ref.get(activeSubscriptionGeneration);
+          const currentSession = Option.getOrNull(yield* SubscriptionRef.get(supervisor.session));
+          const activeItems = items
+            .slice(start, start + MAX_STREAM_ITEMS_PER_PUBLISH)
+            .filter(
+              (item) => item.session === currentSession && item.generation === activeGeneration,
+            )
+            .map((item) => item.value);
+          if (activeItems.length > 0) {
+            yield* applyItemsLocked(activeItems);
+          }
+        }),
+      );
+    }
+  });
 
   const foregroundResubscriptions = Option.match(wakeups, {
     onNone: () => Stream.never,
@@ -350,7 +361,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
   return state;
 });
 
-export function shellStateChanges(environmentId: EnvironmentId) {
+function shellStateChanges(environmentId: EnvironmentId) {
   return followStreamInEnvironment(
     environmentId,
     Stream.unwrap(makeEnvironmentShellState().pipe(Effect.map(SubscriptionRef.changes))),

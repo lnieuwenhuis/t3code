@@ -51,6 +51,7 @@ function session(client: WsRpcProtocolClient): RpcSession.RpcSession {
   return {
     client,
     initialConfig: Effect.succeed({ shellResumeCompletionMarker: true } as never),
+    subscribeServerConfig: (input) => client.subscribeServerConfig(input),
     ready: Effect.void,
     probe: Effect.void,
     closed: Effect.never,
@@ -417,14 +418,11 @@ describe("environment shell synchronization", () => {
       const before = yield* Ref.get(publications);
 
       // 400 upserts across 25 threads, offered as one backlog batch.
-      const flood = Array.from(
-        { length: 400 },
-        (_, index): OrchestrationShellStreamItem => ({
-          kind: "thread-upserted",
-          sequence: index + 2,
-          thread: { id: `thread-${index % 25}` } as never,
-        }),
-      );
+      const flood = Array.from({ length: 400 }, (_, index): OrchestrationShellStreamItem => ({
+        kind: "thread-upserted",
+        sequence: index + 2,
+        thread: { id: `thread-${index % 25}` } as never,
+      }));
       yield* Queue.offerAll(events, flood);
       const settled = yield* SubscriptionRef.changes(shellState).pipe(
         Stream.filter(
@@ -442,5 +440,99 @@ describe("environment shell synchronization", () => {
       }
       expect((yield* Ref.get(publications)) - before).toBeLessThan(50);
     }),
+  );
+  it.effect(
+    "yields between shell slices and discards the remaining backlog after a session switch",
+    () =>
+      Effect.gen(function* () {
+        const events = yield* Queue.unbounded<OrchestrationShellStreamItem>();
+        const client = {
+          [ORCHESTRATION_WS_METHODS.subscribeShell]: () => Stream.fromQueue(events),
+        } as unknown as WsRpcProtocolClient;
+        const supervisorState = yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE);
+        const activeSession = yield* SubscriptionRef.make<Option.Option<RpcSession.RpcSession>>(
+          Option.some(session(client)),
+        );
+        const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+          target: TARGET,
+          state: supervisorState,
+          session: activeSession,
+          prepared: yield* SubscriptionRef.make(Option.some(PREPARED)),
+          connect: Effect.void,
+          disconnect: Effect.void,
+          retryNow: Effect.void,
+        } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
+        const cache = Persistence.EnvironmentCacheStore.of({
+          loadShell: () => Effect.succeed(Option.none()),
+          saveShell: () => Effect.void,
+          loadThread: () => Effect.succeed(Option.none()),
+          saveThread: () => Effect.void,
+          removeThread: () => Effect.void,
+          loadServerConfig: () => Effect.succeed(Option.none()),
+          saveServerConfig: () => Effect.void,
+          loadVcsRefs: () => Effect.succeed(Option.none()),
+          saveVcsRefs: () => Effect.void,
+          removeVcsRefs: () => Effect.void,
+          clearVcsRefs: () => Effect.void,
+          clear: () => Effect.void,
+        });
+        const snapshotLoader = ShellSnapshotLoader.of({
+          load: () => Effect.succeed(Option.none()),
+        });
+        const shellState = yield* makeEnvironmentShellState().pipe(
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          Effect.provideService(Persistence.EnvironmentCacheStore, cache),
+          Effect.provideService(ShellSnapshotLoader, snapshotLoader),
+        );
+        yield* Queue.offer(events, { kind: "snapshot", snapshot: LIVE_SHELL_SNAPSHOT });
+        yield* SubscriptionRef.changes(shellState).pipe(
+          Stream.filter((state) => Option.isSome(state.snapshot)),
+          Stream.runHead,
+        );
+        const replacement = session({
+          [ORCHESTRATION_WS_METHODS.subscribeShell]: () =>
+            Stream.make({
+              kind: "snapshot" as const,
+              snapshot: { ...LIVE_SHELL_SNAPSHOT, snapshotSequence: 1000 },
+            }).pipe(Stream.concat(Stream.never)),
+        } as unknown as WsRpcProtocolClient);
+        const appliedSequences: number[] = [];
+        let switched = false;
+        yield* SubscriptionRef.changes(shellState).pipe(
+          Stream.runForEach((state) =>
+            Effect.gen(function* () {
+              if (Option.isNone(state.snapshot)) return;
+              const sequence = state.snapshot.value.snapshotSequence;
+              if (sequence <= 1 || sequence >= 1000) return;
+              appliedSequences.push(sequence);
+              if (!switched) {
+                switched = true;
+                yield* SubscriptionRef.set(activeSession, Option.some(replacement));
+              }
+            }),
+          ),
+          Effect.forkScoped,
+        );
+
+        // 400 upserts across 25 threads, offered as one backlog batch.
+        const flood = Array.from({ length: 400 }, (_, index): OrchestrationShellStreamItem => ({
+          kind: "thread-upserted",
+          sequence: index + 2,
+          thread: { id: `thread-${index % 25}` } as never,
+        }));
+        yield* Queue.offerAll(events, flood);
+        const settled = yield* SubscriptionRef.changes(shellState).pipe(
+          Stream.filter(
+            (state) =>
+              Option.isSome(state.snapshot) && state.snapshot.value.snapshotSequence === 1000,
+          ),
+          Stream.runHead,
+        );
+
+        const snapshot = Option.getOrThrow(Option.getOrThrow(settled).snapshot);
+        expect(snapshot.threads).toEqual(LIVE_SHELL_SNAPSHOT.threads);
+        expect(appliedSequences.length).toBeGreaterThan(0);
+        expect(Math.max(...appliedSequences)).toBeLessThanOrEqual(129);
+      }),
   );
 });
