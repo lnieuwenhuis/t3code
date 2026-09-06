@@ -48,7 +48,10 @@ function cloneFailureDetail(stderr: string, remoteUrl?: string | null): string {
     if (remoteUrl && isSshRemoteUrl(remoteUrl)) {
       return "SSH authentication failed. Add an SSH key to your source control account and try again.";
     }
-    return "HTTPS authentication failed. Configure Git credentials for the source control host and try again.";
+    if (remoteUrl && /^https?:\/\//iu.test(remoteUrl)) {
+      return "HTTPS authentication failed. Configure Git credentials for the source control host and try again.";
+    }
+    return "Git authentication failed. Check the credentials configured for this remote and try again.";
   }
   if (/could not resolve (?:host|hostname)/iu.test(stderr)) {
     return "The source control host could not be resolved. Check your network or VPN connection and try again.";

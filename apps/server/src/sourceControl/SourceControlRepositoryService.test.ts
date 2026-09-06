@@ -198,7 +198,7 @@ it.effect("clones a looked-up repository into the requested destination", () =>
 );
 
 it.effect("returns actionable, transport-safe clone failures", () => {
-  const cases = [
+  const cases: ReadonlyArray<{ stderr: string; expected: string; remoteUrl?: string }> = [
     {
       stderr: "Host key verification failed.\nfatal: Could not read from remote repository.\n",
       expected:
@@ -233,6 +233,26 @@ it.effect("returns actionable, transport-safe clone failures", () => {
       expected:
         "Git could not connect to the source control host. Check your network or VPN connection and try again.",
     },
+    ...(
+      [
+        [
+          CLONE_URLS.sshUrl,
+          "SSH authentication failed. Add an SSH key to your source control account and try again.",
+        ],
+        [
+          CLONE_URLS.url,
+          "HTTPS authentication failed. Configure Git credentials for the source control host and try again.",
+        ],
+        [
+          "custom::repository",
+          "Git authentication failed. Check the credentials configured for this remote and try again.",
+        ],
+      ] as const
+    ).map(([remoteUrl, expected]) => ({
+      remoteUrl,
+      stderr: "fatal: Authentication failed",
+      expected,
+    })),
     {
       stderr: "fatal: an unrecognized clone failure\n",
       expected:
@@ -240,7 +260,7 @@ it.effect("returns actionable, transport-safe clone failures", () => {
     },
   ] as const;
 
-  return Effect.forEach(cases, ({ stderr, expected }) =>
+  return Effect.forEach(cases, ({ stderr, expected, remoteUrl }) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const parent = yield* fs.makeTempDirectoryScoped({
@@ -249,13 +269,13 @@ it.effect("returns actionable, transport-safe clone failures", () => {
       const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
       const error = yield* Effect.flip(
         service.cloneRepository({
-          remoteUrl: CLONE_URLS.sshUrl,
+          remoteUrl: remoteUrl ?? CLONE_URLS.sshUrl,
           destinationPath: `${parent}/t3code`,
         }),
       );
 
       assert.strictEqual(error.operation, "cloneRepository");
-      assert.strictEqual(error.provider, "github");
+      assert.strictEqual(error.provider, remoteUrl === "custom::repository" ? "unknown" : "github");
       assert.strictEqual(error.detail, expected);
       assert.instanceOf(error.cause, GitCommandError);
       assert.strictEqual(error.cause.detail, "git clone exited with a non-zero status.");
