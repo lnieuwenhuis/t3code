@@ -1019,6 +1019,21 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
+  it.effect("does not republish buffered snapshots after a terminal tombstone", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ cached: BASE_THREAD });
+      yield* Queue.offerAll(harness.inputs, [
+        ...Array.from({ length: 400 }, () => snapshot(BASE_THREAD)),
+        new OrchestrationThreadNotFoundError({ threadId: THREAD_ID }),
+      ]);
+      yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
+      yield* TestClock.adjust("30 seconds");
+      expect((yield* Ref.get(harness.latest)).status).toBe("deleted");
+      expect(yield* Ref.get(harness.savedThreads)).toEqual([]);
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(1);
+    }),
+  );
+
   it.effect("does not resubscribe a missing thread on foreground wakeups", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ cached: BASE_THREAD });
