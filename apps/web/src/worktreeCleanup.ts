@@ -36,8 +36,8 @@ export type WorktreeCheckThread = Pick<ThreadShell, "id" | "worktreePath">;
 
 /** Resolves the worktree path to offer for removal when deleting a thread,
     folding in archived siblings so a worktree they still link isn't treated as
-    orphaned. Only fetches when the thread has a worktree, and falls back to
-    `threads` alone when the fetch fails. */
+    orphaned. Only fetches when the thread has a worktree. An unavailable
+    snapshot cannot prove the worktree is orphaned, so cleanup is skipped. */
 export async function resolveOrphanedWorktreePathForDelete(input: {
   readonly threads: ReadonlyArray<WorktreeCheckThread>;
   readonly threadId: ThreadShell["id"];
@@ -49,8 +49,8 @@ export async function resolveOrphanedWorktreePathForDelete(input: {
   }
 
   const archivedThreads = await input.fetchArchivedThreads();
-  const checkThreads = archivedThreads ? [...input.threads, ...archivedThreads] : input.threads;
-  return getOrphanedWorktreePathForThread(checkThreads, input.threadId);
+  if (archivedThreads === null) return null;
+  return getOrphanedWorktreePathForThread([...input.threads, ...archivedThreads], input.threadId);
 }
 
 export function formatWorktreePathForDisplay(worktreePath: string): string {

@@ -125,7 +125,7 @@ describe("resolveOrphanedWorktreePathForDelete", () => {
     expect(result).toBe("/tmp/repo/worktrees/feature-a");
   });
 
-  it("falls back to the active-only list when the archived fetch fails, instead of blocking the delete", async () => {
+  it("does not authorize worktree cleanup when archived siblings cannot be checked", async () => {
     const threads = [
       makeThread({
         id: ThreadId.make("thread-1"),
@@ -137,7 +137,7 @@ describe("resolveOrphanedWorktreePathForDelete", () => {
       threadId: ThreadId.make("thread-1"),
       fetchArchivedThreads: async () => null,
     });
-    expect(result).toBe("/tmp/repo/worktrees/feature-a");
+    expect(result).toBeNull();
   });
 
   it("skips the archived fetch entirely when the thread has no worktree", async () => {
