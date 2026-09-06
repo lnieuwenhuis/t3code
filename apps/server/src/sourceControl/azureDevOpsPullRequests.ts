@@ -14,6 +14,9 @@ export interface NormalizedAzureDevOpsPullRequestRecord {
   readonly baseRefName: string;
   readonly headRefName: string;
   readonly state: "open" | "closed" | "merged";
+  readonly isDraft?: boolean;
+  readonly closedAt?: string | null;
+  readonly mergedAt?: string | null;
   readonly updatedAt: Option.Option<DateTime.Utc>;
   readonly isCrossRepository: boolean;
   readonly headRepositoryNameWithOwner?: string;
@@ -51,6 +54,7 @@ const AzureDevOpsPullRequestSchema = Schema.Struct({
   sourceRefName: TrimmedNonEmptyString,
   targetRefName: TrimmedNonEmptyString,
   status: Schema.String,
+  isDraft: Schema.optional(Schema.Boolean),
   creationDate: Schema.optional(Schema.OptionFromNullOr(Schema.DateTimeUtcFromString)),
   closedDate: Schema.optional(Schema.OptionFromNullOr(Schema.DateTimeUtcFromString)),
   _links: Schema.optional(
@@ -183,13 +187,21 @@ function normalizeAzureDevOpsPullRequestRecord(
   const headRepositoryNameWithOwner =
     forkProjectName && forkRepositoryName ? `${forkProjectName}/${forkRepositoryName}` : null;
 
+  const state = normalizeAzureDevOpsPullRequestState(raw.status);
+  const terminalAt = Option.match(raw.closedDate ?? Option.none(), {
+    onNone: () => null,
+    onSome: DateTime.formatIso,
+  });
   return {
     number: raw.pullRequestId,
     title: raw.title,
     url: normalizeAzureDevOpsPullRequestUrl(raw),
     baseRefName: normalizeRefName(raw.targetRefName),
     headRefName: normalizeRefName(trimOptionalString(forkSource?.name) ?? raw.sourceRefName),
-    state: normalizeAzureDevOpsPullRequestState(raw.status),
+    state,
+    ...(raw.isDraft === true ? { isDraft: true } : {}),
+    closedAt: state === "closed" ? terminalAt : null,
+    mergedAt: state === "merged" ? terminalAt : null,
     updatedAt: (raw.closedDate ?? Option.none()).pipe(
       Option.orElse(() => raw.creationDate ?? Option.none()),
     ),
