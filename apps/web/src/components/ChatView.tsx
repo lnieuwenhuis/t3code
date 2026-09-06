@@ -2633,7 +2633,12 @@ export default function ChatView(props: ChatViewProps) {
   // the thread's composer draft, replacing the persisted copy of text that
   // was carried in from the draft.
   const returnTextToComposerDraft = useCallback(
-    (requestId: string, text: string, draftTarget: ScopedThreadRef | DraftId) => {
+    (
+      requestId: string,
+      text: string,
+      draftTarget: ScopedThreadRef | DraftId,
+      discardEmptyCarriedDraft = false,
+    ) => {
       const carried = carriedComposerDraftByRequestIdRef.current.get(requestId);
       const draftPrompt =
         useComposerDraftStore.getState().getComposerDraft(draftTarget)?.prompt ?? "";
@@ -2641,6 +2646,7 @@ export default function ChatView(props: ChatViewProps) {
         draftPrompt,
         carriedDraftPrompt: carried?.draftTarget === draftTarget ? carried.text : null,
         pendingCustomAnswer: text,
+        discardEmptyCarriedDraft,
       });
       if (nextDraftPrompt === null) {
         return;
@@ -7252,6 +7258,16 @@ export default function ChatView(props: ChatViewProps) {
       if (!question || question.allowCustomAnswer === false) {
         return;
       }
+      // An explicit erase also discards the persisted copy of the carried
+      // first answer, so Stop cannot resurrect text the user removed.
+      if (questionId === activePendingUserInput.questions[0]?.id && value.trim().length === 0) {
+        returnTextToComposerDraft(
+          activePendingUserInput.requestId,
+          value,
+          composerDraftTarget,
+          true,
+        );
+      }
       promptRef.current = value;
       setPendingUserInputAnswersByRequestId((existing) => ({
         ...existing,
@@ -7272,7 +7288,7 @@ export default function ChatView(props: ChatViewProps) {
         composerRef.current?.focusAt(nextCursor);
       }
     },
-    [activePendingUserInput, composerRef],
+    [activePendingUserInput, composerRef, composerDraftTarget, returnTextToComposerDraft],
   );
 
   const onAdvanceActivePendingUserInput = useCallback(() => {

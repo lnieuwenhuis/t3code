@@ -1027,6 +1027,25 @@ describe("mergeComposerDraftPromptWithPendingAnswer", () => {
 });
 
 describe("resolveComposerDraftPromptAfterReturningPendingAnswer", () => {
+  it("discards only the matching carried copy when the user erases their answer", () => {
+    expect(
+      resolveComposerDraftPromptAfterReturningPendingAnswer({
+        draftPrompt: "original composer text",
+        carriedDraftPrompt: "original composer text",
+        pendingCustomAnswer: "",
+        discardEmptyCarriedDraft: true,
+      }),
+    ).toBe("");
+    expect(
+      resolveComposerDraftPromptAfterReturningPendingAnswer({
+        draftPrompt: "another draft",
+        carriedDraftPrompt: "original composer text",
+        pendingCustomAnswer: "",
+        discardEmptyCarriedDraft: true,
+      }),
+    ).toBeNull();
+  });
+
   it("preserves the carried draft when an option replaces an empty custom answer", () => {
     expect(
       resolveComposerDraftPromptAfterReturningPendingAnswer({

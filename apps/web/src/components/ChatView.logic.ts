@@ -476,7 +476,16 @@ export function resolveComposerDraftPromptAfterReturningPendingAnswer(input: {
   draftPrompt: string;
   carriedDraftPrompt: string | null;
   pendingCustomAnswer: string;
+  discardEmptyCarriedDraft?: boolean;
 }): string | null {
+  if (
+    input.discardEmptyCarriedDraft &&
+    input.pendingCustomAnswer.trim().length === 0 &&
+    input.carriedDraftPrompt !== null &&
+    input.draftPrompt === input.carriedDraftPrompt
+  ) {
+    return "";
+  }
   const existingDraftPrompt =
     input.carriedDraftPrompt !== null && input.draftPrompt === input.carriedDraftPrompt
       ? ""
