@@ -3475,10 +3475,22 @@ it.effect("a changed revision invalidates every held diff page before reloading"
     const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
     const calls: Array<string | undefined> = [];
     let revision = "old";
+    let failDetail = false;
     const service = yield* makeService({
       projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
       providers: [
         fakeProvider("github", {
+          getChangeRequest: () =>
+            failDetail
+              ? Effect.fail(
+                  new PullRequestProviderError({
+                    provider: "github",
+                    operation: "getChangeRequest",
+                    reason: "failed",
+                    detail: "HTTP 503",
+                  }),
+                )
+              : Effect.succeed(hostedChangeRequest("body", 4)),
           getDiff: (input) =>
             Effect.sync(() => {
               calls.push(input.cursor);
@@ -3491,6 +3503,7 @@ it.effect("a changed revision invalidates every held diff page before reloading"
         }),
       ],
     });
+    yield* service.detail(reference);
     assert.strictEqual((yield* service.diff(reference)).patch, "old:first");
     assert.strictEqual(
       (yield* service.diff({ ...reference, cursor: "page-2" })).patch,
@@ -3499,6 +3512,15 @@ it.effect("a changed revision invalidates every held diff page before reloading"
 
     revision = "new";
     yield* service.invalidate({ reference, scope: "detail" });
+    assert.strictEqual((yield* service.diff(reference)).patch, "old:first");
+    assert.strictEqual(
+      (yield* service.diff({ ...reference, cursor: "page-2" })).patch,
+      "old:page-2",
+    );
+    assert.deepStrictEqual(calls, [undefined, "page-2"]);
+
+    failDetail = true;
+    yield* Effect.flip(service.detail(reference));
     assert.strictEqual((yield* service.diff(reference)).patch, "old:first");
     assert.strictEqual(
       (yield* service.diff({ ...reference, cursor: "page-2" })).patch,

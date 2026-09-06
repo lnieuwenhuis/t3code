@@ -2401,19 +2401,28 @@ export const make = Effect.gen(function* () {
       },
     },
   );
+  const lastGoodDiffRevision = makeLastGoodRead<string>(DIFF_CACHE_CAPACITY);
   const diff: PullRequestService["Service"]["diff"] = (input) => {
+    const epoch = diffEpoch(input);
+    const revisionKey = JSON.stringify([epoch, input.projectId, input.repository, input.number]);
+    const observedRevision = lastGoodSummary.peek(refCacheKey(input))?.updatedAt;
+    // Detail invalidation must not erase the revision identifying held diff pages while
+    // the fresh metadata is pending or fails. Full invalidation changes this key's epoch.
+    const revision = observedRevision ?? lastGoodDiffRevision.peek(revisionKey) ?? null;
+    const rememberRevision =
+      input.commit === undefined && observedRevision !== undefined
+        ? lastGoodDiffRevision.record(revisionKey, observedRevision)
+        : Effect.void;
     const key = JSON.stringify([
-      diffEpoch(input),
+      epoch,
       input.projectId,
       input.repository,
       input.number,
       input.cursor ?? null,
       input.commit ?? null,
-      input.commit === undefined
-        ? (lastGoodSummary.peek(refCacheKey(input))?.updatedAt ?? null)
-        : null,
+      input.commit === undefined ? revision : null,
     ]);
-    return staleDiff(key, Cache.get(diffCache, key));
+    return rememberRevision.pipe(Effect.andThen(staleDiff(key, Cache.get(diffCache, key))));
   };
 
   const listStatsCache = yield* Cache.makeWith(
