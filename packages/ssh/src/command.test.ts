@@ -131,6 +131,8 @@ describe("ssh command", () => {
           "sh",
           "-s",
         ]);
+      } else {
+        assert.fail("Expected a standard SSH command.");
       }
     }).pipe(Effect.provide(processLayer));
   });
