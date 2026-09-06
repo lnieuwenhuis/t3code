@@ -335,7 +335,7 @@ export function subscribeDynamicWithGeneration<TTag extends EnvironmentSubscript
   );
 }
 
-export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
+function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
   tag: TTag,
   makeInput: (session: RpcSession) => Effect.Effect<EnvironmentRpcInput<TTag>>,
   options?: SubscriptionOptions<TTag>,
