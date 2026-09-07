@@ -39,16 +39,16 @@ export const forkParked = <A, E, R>(
 ): Effect.Effect<void, never, Scope.Scope | Exclude<R, Tracer.ParentSpan>> =>
   Effect.gen(function* () {
     const activation = yield* ServerActivation;
-    const detached = withDetachedSpan(effect);
     if (activation === undefined) {
-      yield* Effect.forkScoped(detached);
+      yield* Effect.forkScoped(withDetachedSpan(effect));
       return;
     }
     const parked = yield* Deferred.make<void>();
     yield* Effect.forkScoped(
       Deferred.succeed(parked, undefined).pipe(
         Effect.andThen(activation),
-        Effect.andThen(detached),
+        Effect.andThen(effect),
+        withDetachedSpan,
       ),
     );
     yield* Deferred.await(parked);

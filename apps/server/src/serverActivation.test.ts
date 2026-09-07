@@ -6,6 +6,41 @@ import * as Tracer from "effect/Tracer";
 
 import { forkParked, ServerActivation, withDetachedSpan } from "./serverActivation.ts";
 
+it.effect("forkParked detaches the activation wait and keeps the same root after release", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const ambient = Tracer.externalSpan({
+        traceId: "00000000000000000000000000000003",
+        spanId: "0000000000000003",
+        sampled: true,
+      });
+      const gate = yield* Deferred.make<void>();
+      const waiting = yield* Deferred.make<Option.Option<Tracer.AnySpan>>();
+      const running = yield* Deferred.make<Tracer.AnySpan>();
+      const activation = Effect.gen(function* () {
+        const parent = yield* Effect.serviceOption(Tracer.ParentSpan);
+        yield* Deferred.succeed(waiting, parent);
+        yield* Deferred.await(gate);
+      });
+
+      yield* forkParked(
+        Effect.service(Tracer.ParentSpan).pipe(
+          Effect.flatMap((parent) => Deferred.succeed(running, parent)),
+        ),
+      ).pipe(
+        Effect.provideService(ServerActivation, activation),
+        Effect.provideService(Tracer.ParentSpan, ambient),
+      );
+
+      const parent = Option.getOrThrow(yield* Deferred.await(waiting));
+      expect(parent).not.toBe(ambient);
+      expect(yield* Deferred.isDone(running)).toBe(false);
+      yield* Deferred.succeed(gate, undefined);
+      expect(yield* Deferred.await(running)).toBe(parent);
+    }),
+  ),
+);
+
 it.effect("proves a root is parked before returning and releases it with one gate", () =>
   Effect.scoped(
     Effect.gen(function* () {
