@@ -4,10 +4,11 @@ import { collectLimitAccounts, collectLimitPools } from "@t3tools/shared/usageLi
 /** Neutral until a quarter is left, then warning, then destructive at a tenth. */
 export type SidebarLimitTone = "ok" | "low" | "critical";
 
-export const LOW_REMAINING_PERCENT = 25;
-export const CRITICAL_REMAINING_PERCENT = 10;
+const LOW_REMAINING_PERCENT = 25;
+const CRITICAL_REMAINING_PERCENT = 10;
 
 export interface SidebarLimitWindow {
+  /** `kind:id`, since Codex reuses `primary` for a session window on one plan and a monthly one on another. */
   readonly id: string;
   readonly label: string;
   readonly remainingPercent: number;
@@ -48,7 +49,7 @@ export function collectSidebarLimits(
     .filter((pool) => pool.windows.length > 0)
     .map((pool) => {
       const windows = pool.windows.map((window) => ({
-        id: window.id,
+        id: `${window.kind}:${window.id}`,
         label: window.label,
         remainingPercent: window.remainingPercent,
         resetsAt: window.resets[0]?.at ?? null,

@@ -88,13 +88,13 @@ describe("collectSidebarLimits", () => {
     });
     expect(codex?.windows).toEqual([
       {
-        id: "five_hour",
+        id: "session:five_hour",
         label: "Session",
         remainingPercent: 60,
         resetsAt: Date.parse(session.resetsAt),
       },
       {
-        id: "seven_day",
+        id: "weekly:seven_day",
         label: "Weekly",
         remainingPercent: 15,
         resetsAt: Date.parse(weekly.resetsAt),
