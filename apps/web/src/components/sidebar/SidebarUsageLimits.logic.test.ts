@@ -176,6 +176,42 @@ describe("collectSidebarLimits", () => {
     ]);
   });
 
+  it("keeps a session and a monthly window apart when the provider reuses their id", () => {
+    const [codex] = collectSidebarLimits(
+      presentations(
+        [
+          "Laptop",
+          [
+            provider({
+              auth: { status: "authenticated", email: "paid@example.com" },
+              usageLimits: {
+                checkedAt: "2026-09-03T11:00:00.000Z",
+                windows: [{ ...session, id: "primary", usedPercent: 30 }],
+              },
+            }),
+          ],
+        ],
+        [
+          "Desktop",
+          [
+            provider({
+              auth: { status: "authenticated", email: "free@example.com" },
+              usageLimits: {
+                checkedAt: "2026-09-03T11:00:00.000Z",
+                windows: [{ id: "primary", kind: "monthly", label: "Monthly", usedPercent: 70 }],
+              },
+            }),
+          ],
+        ],
+      ),
+      now,
+    );
+    expect(codex?.windows.map((window) => [window.id, window.remainingPercent])).toEqual([
+      ["session:primary", 70],
+      ["monthly:primary", 30],
+    ]);
+  });
+
   it("is empty when no provider reports limits", () => {
     expect(collectSidebarLimits(presentations(["Laptop", [provider({})]]), now)).toEqual([]);
     expect(collectSidebarLimits(new Map(), now)).toEqual([]);
