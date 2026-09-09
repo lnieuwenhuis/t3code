@@ -2138,10 +2138,8 @@ export const make = Effect.gen(function* () {
   const diffEpochs = new Map<string, number>();
   const REF_EPOCH_CAPACITY = 2_048;
   const refScope = (ref: PullRequestRef) => `${ref.projectId} ${ref.repository} ${ref.number}`;
-  const refEpoch = (ref: PullRequestRef) =>
-    Math.max(turnRefreshEpoch, refEpochs.get(refScope(ref)) ?? 0);
-  const diffEpoch = (ref: PullRequestRef) =>
-    Math.max(turnRefreshEpoch, diffEpochs.get(refScope(ref)) ?? 0);
+  const refEpoch = (ref: PullRequestRef) => mapEpoch(refEpochs, ref);
+  const diffEpoch = (ref: PullRequestRef) => mapEpoch(diffEpochs, ref);
   const refCacheKey = (ref: PullRequestRef) =>
     JSON.stringify([refEpoch(ref), ref.projectId, ref.repository, ref.number]);
   // Counts belong to a PR, not a filtered page. Background reads and filter changes reuse
@@ -2165,8 +2163,13 @@ export const make = Effect.gen(function* () {
       const oldest = epochs.keys().next().value;
       if (oldest !== undefined) epochs.delete(oldest);
     }
-    epochs.set(scope, ++epochCounter);
+    const epoch = ++epochCounter;
+    epochs.set(scope, epoch);
+    return epoch;
   };
+  // Reads reserve an epoch too: returning a default after eviction would revive held keys.
+  const mapEpoch = (epochs: Map<string, number>, ref: PullRequestRef) =>
+    Math.max(turnRefreshEpoch, epochs.get(refScope(ref)) ?? bumpMapEpoch(epochs, ref));
   const bumpDetailEpoch = (ref: PullRequestRef) => bumpMapEpoch(refEpochs, ref);
   const bumpRefEpoch = (ref: PullRequestRef) => {
     bumpMapEpoch(refEpochs, ref);

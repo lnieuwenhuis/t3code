@@ -3470,6 +3470,60 @@ it.effect("a detail-scoped invalidate refreshes detail without stranding the hel
   }),
 );
 
+for (const afterTurn of [false, true]) {
+  it.effect(
+    `evicting invalidation epochs never revives held responses (after turn: ${afterTurn})`,
+    () =>
+      Effect.gen(function* () {
+        const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+        let version = "old";
+        const service = yield* makeService({
+          projects: [
+            project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+          ],
+          providers: [
+            fakeProvider("github", {
+              getChangeRequest: () =>
+                Effect.succeed({ ...hostedChangeRequest("body", 4), title: version }),
+              getDiff: (input) =>
+                Effect.succeed({
+                  patch: `${version}:${input.cursor ?? "first"}`,
+                  truncated: false,
+                  nextCursor: input.cursor ? null : "page-2",
+                }),
+            }),
+          ],
+        });
+
+        assert.strictEqual((yield* service.detail(reference)).title, "old");
+        assert.strictEqual((yield* service.diff(reference)).patch, "old:first");
+        assert.strictEqual(
+          (yield* service.diff({ ...reference, cursor: "page-2" })).patch,
+          "old:page-2",
+        );
+        if (afterTurn) {
+          yield* service.refreshAfterTurn;
+          yield* service.detail(reference);
+          yield* service.diff(reference);
+          yield* service.diff({ ...reference, cursor: "page-2" });
+        }
+        version = "new";
+        yield* service.invalidate({ reference });
+        // Fill the bounded epoch maps with other scopes without evicting the held responses.
+        for (let number = 2; number <= 2_049; number += 1) {
+          yield* service.invalidate({ reference: { ...reference, number } });
+        }
+
+        assert.strictEqual((yield* service.detail(reference)).title, "new");
+        assert.strictEqual((yield* service.diff(reference)).patch, "new:first");
+        assert.strictEqual(
+          (yield* service.diff({ ...reference, cursor: "page-2" })).patch,
+          "new:page-2",
+        );
+      }),
+  );
+}
+
 it.effect("a changed updatedAt reloads every held diff page after detail-only invalidation", () =>
   Effect.gen(function* () {
     const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
