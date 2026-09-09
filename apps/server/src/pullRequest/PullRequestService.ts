@@ -2164,12 +2164,18 @@ export const make = Effect.gen(function* () {
       if (oldest !== undefined) epochs.delete(oldest);
     }
     const epoch = ++epochCounter;
+    epochs.delete(scope);
     epochs.set(scope, epoch);
     return epoch;
   };
   // Reads reserve an epoch too: returning a default after eviction would revive held keys.
-  const mapEpoch = (epochs: Map<string, number>, ref: PullRequestRef) =>
-    Math.max(turnRefreshEpoch, epochs.get(refScope(ref)) ?? bumpMapEpoch(epochs, ref));
+  const mapEpoch = (epochs: Map<string, number>, ref: PullRequestRef) => {
+    const scope = refScope(ref);
+    const epoch = epochs.get(scope) ?? bumpMapEpoch(epochs, ref);
+    epochs.delete(scope);
+    epochs.set(scope, epoch);
+    return Math.max(turnRefreshEpoch, epoch);
+  };
   const bumpDetailEpoch = (ref: PullRequestRef) => bumpMapEpoch(refEpochs, ref);
   const bumpRefEpoch = (ref: PullRequestRef) => {
     bumpMapEpoch(refEpochs, ref);

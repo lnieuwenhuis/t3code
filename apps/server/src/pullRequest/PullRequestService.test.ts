@@ -3470,6 +3470,46 @@ it.effect("a detail-scoped invalidate refreshes detail without stranding the hel
   }),
 );
 
+it.effect("recently read scopes retain held responses when epoch maps reach capacity", () =>
+  Effect.gen(function* () {
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+    let failHost = false;
+    const failure = new PullRequestProviderError({
+      provider: "github",
+      operation: "read",
+      reason: "failed",
+      detail: "HTTP 503",
+    });
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequest: () =>
+            failHost ? Effect.fail(failure) : Effect.succeed(hostedChangeRequest("held body", 4)),
+          getDiff: () =>
+            failHost
+              ? Effect.fail(failure)
+              : Effect.succeed({ patch: "held patch", truncated: false, nextCursor: null }),
+        }),
+      ],
+    });
+    const heldDetail = yield* service.detail(reference);
+    yield* service.diff(reference);
+    for (let number = 2; number <= 2_048; number += 1) {
+      yield* service.invalidate({ reference: { ...reference, number } });
+    }
+    // Reading the active scope keeps its generations newer than the untouched scopes.
+    yield* service.detail(reference);
+    yield* service.diff(reference);
+    yield* service.invalidate({ reference: { ...reference, number: 2_049 } });
+    failHost = true;
+    yield* TestClock.adjust("61 seconds");
+
+    assert.deepStrictEqual(yield* service.detail(reference), heldDetail);
+    assert.strictEqual((yield* service.diff(reference)).patch, "held patch");
+  }),
+);
+
 for (const afterTurn of [false, true]) {
   it.effect(
     `evicting invalidation epochs never revives held responses (after turn: ${afterTurn})`,
