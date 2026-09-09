@@ -3470,7 +3470,60 @@ it.effect("a detail-scoped invalidate refreshes detail without stranding the hel
   }),
 );
 
-it.effect("a changed revision invalidates every held diff page before reloading", () =>
+it.effect("a changed updatedAt reloads every held diff page after detail-only invalidation", () =>
+  Effect.gen(function* () {
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+    const calls: Array<string | undefined> = [];
+    let updatedAt = "2026-07-02T00:00:00Z";
+    let patchVersion = "old";
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequest: () => Effect.succeed({ ...hostedChangeRequest("body", 4), updatedAt }),
+          getDiff: (input) =>
+            Effect.sync(() => {
+              calls.push(input.cursor);
+              return {
+                patch: `${patchVersion}:${input.cursor ?? "first"}`,
+                truncated: false,
+                nextCursor: input.cursor ? null : "page-2",
+              };
+            }),
+        }),
+      ],
+    });
+
+    yield* service.detail(reference);
+    assert.strictEqual((yield* service.diff(reference)).patch, "old:first");
+    assert.strictEqual(
+      (yield* service.diff({ ...reference, cursor: "page-2" })).patch,
+      "old:page-2",
+    );
+
+    patchVersion = "new";
+    yield* service.invalidate({ reference, scope: "detail" });
+    yield* service.detail(reference);
+    assert.strictEqual((yield* service.diff(reference)).patch, "old:first");
+    assert.strictEqual(
+      (yield* service.diff({ ...reference, cursor: "page-2" })).patch,
+      "old:page-2",
+    );
+    assert.deepStrictEqual(calls, [undefined, "page-2"]);
+
+    updatedAt = "2026-07-03T00:00:00Z";
+    yield* service.invalidate({ reference, scope: "detail" });
+    assert.strictEqual((yield* service.detail(reference)).updatedAt, updatedAt);
+    assert.strictEqual((yield* service.diff(reference)).patch, "new:first");
+    assert.strictEqual(
+      (yield* service.diff({ ...reference, cursor: "page-2" })).patch,
+      "new:page-2",
+    );
+    assert.deepStrictEqual(calls, [undefined, "page-2", undefined, "page-2"]);
+  }),
+);
+
+it.effect("full invalidation reloads every held diff page after a failed detail refresh", () =>
   Effect.gen(function* () {
     const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
     const calls: Array<string | undefined> = [];
