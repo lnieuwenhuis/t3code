@@ -942,11 +942,10 @@ export const make = Effect.gen(function* () {
 
     return materializePullRequestHeadBranchBase(cwd, pullRequest, headRef, localBranch).pipe(
       Effect.catch((primaryCause) =>
-        headRef === null
-          ? // Nothing to fall back on where the host publishes no change-request ref: the
-            // primary attempt already read the only thing that names the head there. A
-            // GitManagerError here is the deliberate explanation of why the head cannot be
-            // resolved; wrapping it would bury that message behind the generic one.
+        headRef === null || resolveHeadRepositoryNameWithOwner(pullRequest) === null
+          ? // Fallback needs both a host ref and a distinct repository-specific primary
+            // attempt; otherwise it would repeat the same fetch or have no ref to use.
+            // Preserve deliberate GitManagerError explanations for unresolvable heads.
             Effect.fail(
               isGitManagerError(primaryCause) ? primaryCause : materializationError(primaryCause),
             )
