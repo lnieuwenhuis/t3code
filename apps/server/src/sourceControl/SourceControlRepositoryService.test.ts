@@ -297,6 +297,32 @@ it.effect("returns actionable, transport-safe clone failures", () => {
   ).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
 });
 
+it.effect("retains the inferred provider on destination validation failures", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const parent = yield* fs.makeTempDirectoryScoped({ prefix: "t3-clone-destination-" });
+    const file = path.join(parent, "file");
+    yield* fs.writeFileString(file, "occupied");
+    const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
+    for (const [destinationPath, detail] of [
+      [" ", "Choose a destination path before cloning."],
+      [file, "Destination path already exists and is not a directory."],
+      [parent, "Destination path already exists and is not empty."],
+    ] as const) {
+      const error = yield* Effect.flip(
+        service.cloneRepository({
+          remoteUrl: `  ${CLONE_URLS.url}  `,
+          destinationPath,
+        }),
+      );
+      assert.strictEqual(error.provider, "github");
+      assert.strictEqual(error.detail, detail);
+      assert.strictEqual(error.operation, "cloneRepository");
+    }
+  }).pipe(Effect.provide(makeLayer({}))),
+);
+
 it.effect("preserves destination probe failures instead of treating them as missing paths", () => {
   const fileSystemCause = PlatformError.systemError({
     _tag: "PermissionDenied",
@@ -314,7 +340,7 @@ it.effect("preserves destination probe failures instead of treating them as miss
       }),
     );
 
-    assert.strictEqual(error.provider, "unknown");
+    assert.strictEqual(error.provider, "github");
     assert.strictEqual(error.operation, "cloneRepository");
     assert.strictEqual(error.cause, fileSystemCause);
   }).pipe(

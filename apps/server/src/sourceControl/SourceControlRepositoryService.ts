@@ -160,12 +160,12 @@ export const make = Effect.gen(function* () {
   });
 
   const normalizeDestinationPath = Effect.fn("SourceControlRepositoryService.normalizeDestination")(
-    function* (destinationPath: string) {
+    function* (destinationPath: string, provider: SourceControlProviderKind) {
       const trimmed = destinationPath.trim();
       if (trimmed.length === 0) {
         return yield* new SourceControlRepositoryError({
           operation: "cloneRepository",
-          provider: "unknown",
+          provider,
           detail: "Choose a destination path before cloning.",
         });
       }
@@ -175,8 +175,8 @@ export const make = Effect.gen(function* () {
   );
 
   const prepareDestination = Effect.fn("SourceControlRepositoryService.prepareDestination")(
-    function* (destinationPath: string) {
-      const normalizedDestination = yield* normalizeDestinationPath(destinationPath);
+    function* (destinationPath: string, provider: SourceControlProviderKind) {
+      const normalizedDestination = yield* normalizeDestinationPath(destinationPath, provider);
       if (yield* fileSystem.exists(normalizedDestination)) {
         const entries = yield* fileSystem
           .readDirectory(normalizedDestination, { recursive: false })
@@ -185,7 +185,7 @@ export const make = Effect.gen(function* () {
               (cause) =>
                 new SourceControlRepositoryError({
                   operation: "cloneRepository",
-                  provider: "unknown",
+                  provider,
                   detail: "Destination path already exists and is not a directory.",
                   cause,
                 }),
@@ -194,7 +194,7 @@ export const make = Effect.gen(function* () {
         if (entries.length > 0) {
           return yield* new SourceControlRepositoryError({
             operation: "cloneRepository",
-            provider: "unknown",
+            provider,
             detail: "Destination path already exists and is not empty.",
           });
         }
@@ -213,13 +213,15 @@ export const make = Effect.gen(function* () {
   const cloneRepository = Effect.fn("SourceControlRepositoryService.cloneRepository")(function* (
     input: SourceControlCloneRepositoryInput,
   ) {
-    const preparedDestination = yield* prepareDestination(input.destinationPath);
     let repository: SourceControlRepositoryInfo | null = null;
     let remoteUrl = input.remoteUrl?.trim() ?? null;
     let provider: SourceControlProviderKind =
       input.provider ??
       (remoteUrl ? detectSourceControlProviderFromRemoteUrl(remoteUrl)?.kind : null) ??
       "unknown";
+    const preparedDestination = yield* prepareDestination(input.destinationPath, provider).pipe(
+      mapRepositoryError("cloneRepository", provider),
+    );
 
     if (input.provider && input.repository) {
       repository = yield* lookupRepository({
