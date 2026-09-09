@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest";
-import { describe, expect } from "vite-plus/test";
+import { describe, expect, expectTypeOf } from "vite-plus/test";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 
@@ -57,6 +57,49 @@ describe("makeDrainableWorker", () => {
 });
 
 describe("makeKeyedDrainableWorker", () => {
+  it("requires callers to handle typed failures", () => {
+    type Process = Parameters<typeof makeKeyedDrainableWorker>[1];
+    expectTypeOf<Effect.Error<ReturnType<Process>>>().toEqualTypeOf<never>();
+  });
+
+  it.live("drains queued work after the caller handles an item failure", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const processed: string[] = [];
+        const handled: string[] = [];
+        const firstStarted = yield* Deferred.make<void>();
+        const releaseFirst = yield* Deferred.make<void>();
+        const worker = yield* makeKeyedDrainableWorker(
+          (_item: string) => "lane",
+          (item) =>
+            Effect.gen(function* () {
+              if (item === "first") {
+                yield* Deferred.succeed(firstStarted, undefined);
+                yield* Deferred.await(releaseFirst);
+                return yield* Effect.fail("item failed");
+              }
+              processed.push(item);
+            }).pipe(
+              Effect.catch((error) =>
+                Effect.sync(() => {
+                  handled.push(error);
+                }),
+              ),
+            ),
+        );
+
+        yield* worker.enqueue("first");
+        yield* Deferred.await(firstStarted);
+        yield* worker.enqueue("second");
+        yield* Deferred.succeed(releaseFirst, undefined);
+        yield* worker.drain;
+
+        expect(handled).toEqual(["item failed"]);
+        expect(processed).toEqual(["second"]);
+      }),
+    ),
+  );
+
   it.live("runs different keys independently while preserving each key's FIFO", () =>
     Effect.scoped(
       Effect.gen(function* () {

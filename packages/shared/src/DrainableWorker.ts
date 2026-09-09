@@ -45,13 +45,16 @@ export interface DrainableWorker<A> {
  * version-bumped lanes). Idle lanes are
  * removed once drained so key cardinality stays bounded.
  *
+ * Callers must handle processing failures before returning: an unhandled failure
+ * stops the lane and leaves queued items undrained.
+ *
  * @param keyOf - Derives the lane key for an item.
  * @param process - The effect to run for each queued item.
  * @returns A `DrainableWorker` with `enqueue` and `drain`.
  */
-export const makeKeyedDrainableWorker = <A, K, E, R>(
+export const makeKeyedDrainableWorker = <A, K, R>(
   keyOf: (item: A) => K,
-  process: (item: A) => Effect.Effect<void, E, R>,
+  process: (item: A) => Effect.Effect<void, never, R>,
 ): Effect.Effect<DrainableWorker<A>, never, Scope.Scope | R> =>
   Effect.gen(function* () {
     const context = yield* Effect.context<R>();
