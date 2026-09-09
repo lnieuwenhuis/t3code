@@ -148,70 +148,53 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       ),
     );
 
-  // Folds a run of consecutive snapshot/event items into at most one
-  // published state, so a busy environment costs one React commit per batch
-  // instead of one per shell event.
-  const applyItemRun = Effect.fn("EnvironmentShellState.applyItemRun")(function* (
-    run: ReadonlyArray<Exclude<OrchestrationShellStreamItem, { kind: "synchronized" }>>,
+  // Apply each received batch with one state write. The RPC client's bounded
+  // buffer can split a server chunk, so a bulk action can still need several
+  // writes, but each write includes every event in that batch.
+  const applyItemsLocked = Effect.fn("EnvironmentShellState.applyItemsLocked")(function* (
+    items: ReadonlyArray<OrchestrationShellStreamItem>,
   ) {
-    const current = yield* SubscriptionRef.get(state);
-    let nextSnapshot = Option.getOrNull(current.snapshot);
+    const initial = yield* SubscriptionRef.get(state);
+    let waiting = yield* Ref.get(awaitingCompletion);
+    let next = initial;
     let receivedSnapshot = false;
-    let applied = false;
-    for (const item of run) {
-      if (item.kind === "snapshot") {
-        nextSnapshot = item.snapshot;
-        receivedSnapshot = true;
-        applied = true;
-      } else if (nextSnapshot !== null) {
-        if (item.sequence > nextSnapshot.snapshotSequence) {
-          nextSnapshot = applyShellStreamEvent(nextSnapshot, item);
+    for (const item of items) {
+      if (item.kind === "synchronized") {
+        waiting = false;
+        if (Option.isSome(next.snapshot)) {
+          next = { ...next, status: "live", error: Option.none() };
         }
-        applied = true;
+        continue;
       }
+      const nextSnapshot =
+        item.kind === "snapshot"
+          ? item.snapshot
+          : Option.match(next.snapshot, {
+              onNone: () => null,
+              onSome: (snapshot) =>
+                item.sequence > snapshot.snapshotSequence
+                  ? applyShellStreamEvent(snapshot, item)
+                  : snapshot,
+            });
+      if (nextSnapshot === null) continue;
+      receivedSnapshot ||= item.kind === "snapshot";
+      next = {
+        snapshot: Option.some(nextSnapshot),
+        status: waiting ? "synchronizing" : "live",
+        error: Option.none(),
+      };
     }
-    if (!applied || nextSnapshot === null) {
-      return;
-    }
-
-    const waiting = yield* Ref.get(awaitingCompletion);
-    yield* SubscriptionRef.set(state, {
-      snapshot: Option.some(nextSnapshot),
-      status: waiting ? "synchronizing" : "live",
-      error: Option.none(),
-    });
+    yield* Ref.set(awaitingCompletion, waiting);
+    if (next === initial) return;
+    yield* SubscriptionRef.set(state, next);
     if (receivedSnapshot) {
       const session = yield* Ref.get(activeSubscriptionSession);
       if (session !== null) {
         yield* Ref.set(lastAuthoritativeSession, session);
       }
     }
-    yield* Queue.offer(persistence, nextSnapshot);
-  });
-
-  // Body of applyItems, running under applyLock.
-  const applyItemsLocked = Effect.fn("EnvironmentShellState.applyItemsLocked")(function* (
-    items: ReadonlyArray<OrchestrationShellStreamItem>,
-  ) {
-    let run: Array<Exclude<OrchestrationShellStreamItem, { kind: "synchronized" }>> = [];
-    for (const item of items) {
-      if (item.kind !== "synchronized") {
-        run.push(item);
-        continue;
-      }
-      if (run.length > 0) {
-        yield* applyItemRun(run);
-        run = [];
-      }
-      yield* Ref.set(awaitingCompletion, false);
-      yield* SubscriptionRef.update(state, (current) =>
-        Option.isSome(current.snapshot)
-          ? { ...current, status: "live" as const, error: Option.none() }
-          : current,
-      );
-    }
-    if (run.length > 0) {
-      yield* applyItemRun(run);
+    if (next.snapshot !== initial.snapshot && Option.isSome(next.snapshot)) {
+      yield* Queue.offer(persistence, next.snapshot.value);
     }
   });
 
