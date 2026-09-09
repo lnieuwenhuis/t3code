@@ -515,11 +515,20 @@ describe("environment RPC", () => {
     Effect.gen(function* () {
       const transient = new Error("transient snapshot failure");
       const subscriptionCount = yield* Ref.make(0);
+      const retryReady = yield* Deferred.make<void>();
+      const retryStarted = yield* Deferred.make<void>();
       const client = {
         [WS_METHODS.subscribeTerminalEvents]: () =>
           Stream.unwrap(
             Ref.getAndUpdate(subscriptionCount, (count) => count + 1).pipe(
-              Effect.map((count) => (count === 0 ? Stream.fail(transient) : Stream.never)),
+              Effect.map((count) =>
+                count === 0
+                  ? Stream.fail(transient)
+                  : Stream.fromEffect(Deferred.succeed(retryStarted, undefined)).pipe(
+                      Stream.drain,
+                      Stream.concat(Stream.never),
+                    ),
+              ),
             ),
           ),
       } as unknown as WsRpcProtocolClient;
@@ -530,7 +539,7 @@ describe("environment RPC", () => {
         WS_METHODS.subscribeTerminalEvents,
         {},
         {
-          onExpectedFailure: () => Effect.void,
+          onExpectedFailure: () => Deferred.succeed(retryReady, undefined).pipe(Effect.asVoid),
           retryExpectedFailureAfter: "100 millis",
           terminalFailure: {
             matches: () => false,
@@ -543,19 +552,11 @@ describe("environment RPC", () => {
         Effect.forkChild,
       );
 
-      // The retry sleep must be scheduled before virtual time advances.
-      for (
-        let attempt = 0;
-        attempt < 100 && (yield* Ref.get(subscriptionCount)) < 1;
-        attempt += 1
-      ) {
-        yield* Effect.yieldNow;
-      }
+      // The handler runs immediately before the retry delay; let that fiber schedule its sleep.
+      yield* Deferred.await(retryReady);
+      yield* Effect.yieldNow;
       yield* TestClock.adjust("100 millis");
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        if ((yield* Ref.get(subscriptionCount)) >= 2) break;
-        yield* Effect.yieldNow;
-      }
+      yield* Deferred.await(retryStarted);
       yield* Fiber.interrupt(subscriptionFiber);
 
       // Classified as a regular expected failure: retried once, handler untouched.
