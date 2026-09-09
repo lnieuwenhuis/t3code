@@ -320,7 +320,7 @@ it.effect("retains the inferred provider on destination validation failures", ()
       assert.strictEqual(error.detail, detail);
       assert.strictEqual(error.operation, "cloneRepository");
     }
-  }).pipe(Effect.provide(makeLayer({}))),
+  }).pipe(Effect.provide(Layer.merge(makeLayer({}), NodeServices.layer))),
 );
 
 it.effect("preserves destination probe failures instead of treating them as missing paths", () => {
