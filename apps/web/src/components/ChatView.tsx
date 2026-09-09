@@ -7379,13 +7379,14 @@ export default function ChatView(props: ChatViewProps) {
       // socket before this RPC settles, and the rescue effect must already know
       // the question was answered rather than cancelled. Unmarked on failure so
       // a later real Stop of the still-open question can rescue the text.
-      submittedPendingUserInputRequestIdsRef.current.add(responseKey);
+      const requestKey = pendingUserInputRequestKey(composerDraftTarget, requestId);
+      submittedPendingUserInputRequestIdsRef.current.add(requestKey);
       // The answer is what gets sent, so the persisted copy of text carried in
       // from the draft goes now, before the resolve can bring the draft back
       // on screen.
-      const carried = carriedComposerDraftByRequestIdRef.current.get(responseKey);
+      const carried = carriedComposerDraftByRequestIdRef.current.get(requestKey);
       if (carried) {
-        carriedComposerDraftByRequestIdRef.current.delete(responseKey);
+        carriedComposerDraftByRequestIdRef.current.delete(requestKey);
         const draftPrompt =
           useComposerDraftStore.getState().getComposerDraft(carried.draftTarget)?.prompt ?? "";
         if (draftPrompt === carried.text) {
@@ -7404,7 +7405,7 @@ export default function ChatView(props: ChatViewProps) {
         },
       });
       if (result._tag === "Failure") {
-        submittedPendingUserInputRequestIdsRef.current.delete(responseKey);
+        submittedPendingUserInputRequestIdsRef.current.delete(requestKey);
         // The answer was not sent after all, so the persisted copy of the
         // carried draft comes back (unless something else filled the draft
         // meanwhile) and the rescue below treats it as blank as usual. This
@@ -7415,7 +7416,7 @@ export default function ChatView(props: ChatViewProps) {
           (useComposerDraftStore.getState().getComposerDraft(carried.draftTarget)?.prompt ?? "")
             .length === 0
         ) {
-          carriedComposerDraftByRequestIdRef.current.set(responseKey, carried);
+          carriedComposerDraftByRequestIdRef.current.set(requestKey, carried);
           setComposerDraftPrompt(carried.draftTarget, carried.text);
         }
         // Stop can remove the question while the answer is in flight. The
