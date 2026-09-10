@@ -8,13 +8,21 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
-layer("050_ProjectionTurnsAssistantMessageIndex", (it) => {
+layer("051_ProjectionTurnsAssistantMessageIndex", (it) => {
   it.effect("indexes correlated canonical assistant lookups", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      yield* runMigrations({ toMigrationInclusive: 49 });
       yield* runMigrations({ toMigrationInclusive: 50 });
+      const applied = yield* runMigrations({ toMigrationInclusive: 51 });
+      assert.deepStrictEqual(applied, [[51, "ProjectionTurnsAssistantMessageIndex"]]);
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 51 }), []);
+
+      const pullRequestTables = yield* sql<{ readonly name: string }>`
+        SELECT name FROM sqlite_master
+        WHERE type = 'table' AND name = 'projection_thread_pull_requests'
+      `;
+      assert.equal(pullRequestTables.length, 1);
 
       const indexes = yield* sql<{
         readonly seq: number;
