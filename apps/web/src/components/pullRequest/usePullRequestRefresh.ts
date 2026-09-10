@@ -83,7 +83,15 @@ export function usePullRequestRefresh({
   const refreshFromHost = useCallback(async () => {
     setIsInvalidating(true);
     try {
-      await invalidate({ environmentId, input: { reference } });
+      const result = await invalidate({ environmentId, input: { reference } });
+      if (result._tag === "Failure") {
+        toastManager.add({
+          type: "error",
+          title: "The pull request could not be refreshed",
+          description: readableFailure(squashAtomCommandFailure(result), "Try refreshing again."),
+        });
+        return;
+      }
       refreshDetail();
       setRefreshToken((token) => token + 1);
     } finally {

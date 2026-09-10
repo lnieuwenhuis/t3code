@@ -199,6 +199,39 @@ describe("mounted pull request refresh sequencing", () => {
     expect(diffRefreshes()).toBe("0");
   });
 
+  it("reports failed manual invalidation without refreshing and allows a successful retry", async () => {
+    await render();
+    const failed = invalidation();
+    await act(async () => {
+      void renderer!.root.findByType("button").props.onClick();
+    });
+    expect(renderer!.root.findByType("button").props.disabled).toBe(true);
+    expect(refreshDetail).not.toHaveBeenCalled();
+    await failed.fail();
+    expect(refreshDetail).not.toHaveBeenCalled();
+    expect(diffRefreshes()).toBe("0");
+    expect(notify).toHaveBeenCalledExactlyOnceWith({
+      type: "error",
+      title: "The pull request could not be refreshed",
+      description: "offline",
+    });
+    expect(renderer!.root.findByType("button").props.disabled).toBe(false);
+
+    const retry = invalidation();
+    await act(async () => {
+      void renderer!.root.findByType("button").props.onClick();
+    });
+    expect(renderer!.root.findByType("button").props.disabled).toBe(true);
+    expect(refreshDetail).not.toHaveBeenCalled();
+    expect(diffRefreshes()).toBe("0");
+    await retry.succeed();
+    expect(invalidate).toHaveBeenCalledTimes(2);
+    expect(refreshDetail).toHaveBeenCalledOnce();
+    expect(diffRefreshes()).toBe("1");
+    expect(notify).toHaveBeenCalledOnce();
+    expect(renderer!.root.findByType("button").props.disabled).toBe(false);
+  });
+
   it("awaits full invalidation before a page refresh", async () => {
     await render();
     const pending = invalidation();
