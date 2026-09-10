@@ -544,9 +544,18 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     items: ReadonlyArray<OrchestrationThreadStreamItem>,
   ) {
     let events: Array<OrchestrationEvent> = [];
+    let pendingWatermark = (yield* Ref.get(pendingOlderPage))?.snapshot.page?.threadSequence;
     for (const item of items) {
       if (item.kind === "event") {
         events.push(item.event);
+        if (pendingWatermark !== undefined && item.event.sequence >= pendingWatermark) {
+          // Publish and merge at the page's watermark, before a later delta
+          // can create a partial row that would shadow the page's full row.
+          // The lock prevents another page from parking during this slice.
+          yield* applyEventRunLocked(events);
+          events = [];
+          pendingWatermark = undefined;
+        }
         continue;
       }
       if (events.length > 0) {
