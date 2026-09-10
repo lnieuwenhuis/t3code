@@ -429,7 +429,9 @@ export function pendingUserInputRequestKey(
  * thread is still on screen (an off-screen cancellation is left alone rather
  * than risk the wrong draft).
  */
-export function shouldRescueCancelledPendingUserInput<TDraftTarget>(input: {
+export function shouldRescueCancelledPendingUserInput<
+  TDraftTarget extends ScopedThreadRef | string,
+>(input: {
   previous: PendingUserInputRequestSnapshot<TDraftTarget> | null;
   nextRequestId: string | null;
   currentDraftTarget: TDraftTarget;
@@ -439,7 +441,11 @@ export function shouldRescueCancelledPendingUserInput<TDraftTarget>(input: {
   if (!previous || previous.requestId === nextRequestId) {
     return false;
   }
-  return !wasSubmitted && previous.draftTarget === currentDraftTarget;
+  return (
+    !wasSubmitted &&
+    pendingUserInputRequestKey(previous.draftTarget, null) ===
+      pendingUserInputRequestKey(currentDraftTarget, null)
+  );
 }
 
 /**

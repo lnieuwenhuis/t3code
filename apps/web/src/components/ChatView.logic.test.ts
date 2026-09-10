@@ -976,6 +976,26 @@ describe("pendingUserInputRequestKey", () => {
 });
 
 describe("shouldRescueCancelledPendingUserInput", () => {
+  it.each([
+    ["env-a", true],
+    ["env-b", false],
+  ] as const)("compares scoped owners by value for %s", (environment, expected) => {
+    expect(
+      shouldRescueCancelledPendingUserInput({
+        previous: {
+          requestId: "req-1",
+          draftTarget: scopeThreadRef(EnvironmentId.make("env-a"), ThreadId.make("thread-a")),
+        },
+        nextRequestId: null,
+        currentDraftTarget: scopeThreadRef(
+          EnvironmentId.make(environment),
+          ThreadId.make("thread-a"),
+        ),
+        wasSubmitted: false,
+      }),
+    ).toBe(expected);
+  });
+
   const previous = { requestId: "req-1", draftTarget: "thread-a" };
 
   it("rescues when the request disappears without being submitted", () => {
