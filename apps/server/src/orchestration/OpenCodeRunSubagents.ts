@@ -431,14 +431,17 @@ interface OpenCodeRunOutput {
 
 const TASK_OUTPUT_WRAPPER =
   /^<task[^>]*>\s*(?:<summary>[\s\S]*?<\/summary>\s*)?<task_(?:result|error)>\s*([\s\S]*?)\s*<\/task_(?:result|error)>\s*<\/task>\s*$/;
+const NATIVE_TASK_OUTPUT_WRAPPER =
+  /^task_id:[^\r\n]*\r?\n\s*<task_result>\s*([\s\S]*?)\s*<\/task_result>\s*$/;
 
-/** Result text of a child task, unwrapped from OpenCode's `<task>` envelope. */
+/** Result text of a child task, unwrapped from OpenCode's task result envelopes. */
 function childSummary(output: unknown, error: unknown): string | undefined {
   const text = asString(error) ?? asString(output);
   if (!text) {
     return undefined;
   }
-  const unwrapped = TASK_OUTPUT_WRAPPER.exec(text)?.[1] ?? text;
+  const unwrapped =
+    TASK_OUTPUT_WRAPPER.exec(text)?.[1] ?? NATIVE_TASK_OUTPUT_WRAPPER.exec(text)?.[1] ?? text;
   const trimmed = unwrapped.trim();
   return trimmed.length > 0 ? trimmed : undefined;
 }

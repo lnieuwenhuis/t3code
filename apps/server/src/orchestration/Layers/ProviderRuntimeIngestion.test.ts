@@ -1597,23 +1597,25 @@ describe("ProviderRuntimeIngestion", () => {
       }),
     ].join("\n");
 
-    await harness.emitAndDrain([
-      {
-        ...shellItem,
-        type: "item.completed",
-        eventId: asEventId("evt-opencode-run-completed"),
-        createdAt: "2026-01-01T00:00:05.000Z",
-        payload: {
-          itemType: "command_execution",
-          status: "completed",
-          title: "Command run",
-          data: {
-            toolName: "Bash",
-            input: { command },
-            result: { type: "tool_result", tool_use_id: "item-opencode-run", content: output },
-          },
+    const completion: LegacyProviderRuntimeEvent = {
+      ...shellItem,
+      type: "item.completed",
+      eventId: asEventId("evt-opencode-run-completed"),
+      createdAt: "2026-01-01T00:00:05.000Z",
+      payload: {
+        itemType: "command_execution",
+        status: "completed",
+        title: "Command run",
+        data: {
+          toolName: "Bash",
+          input: { command },
+          result: { type: "tool_result", tool_use_id: "item-opencode-run", content: output },
         },
       },
+    };
+    await harness.emitAndDrain([
+      completion,
+      { ...completion, eventId: asEventId("evt-opencode-run-redelivered") },
     ]);
 
     const thread = await waitForThread(harness.readModel, (entry) =>

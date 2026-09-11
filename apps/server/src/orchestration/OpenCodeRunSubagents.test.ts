@@ -191,6 +191,21 @@ describe("parseOpenCodeRunCommand", () => {
 });
 
 describe("parseOpenCodeRunOutput", () => {
+  it("unwraps the native task_id result envelope", () => {
+    const output = jsonLine({
+      type: "tool_use",
+      part: {
+        tool: "task",
+        state: {
+          status: "completed",
+          output:
+            "task_id: ses_child (for resuming to continue this task if needed)\n\n<task_result>\n391\n</task_result>",
+        },
+      },
+    });
+    expect(parseOpenCodeRunOutput(output).children[0]?.summary).toBe("391");
+  });
+
   it("folds children, usage, and the final text out of the JSON event stream", () => {
     expect(parseOpenCodeRunOutput(runJsonOutput)).toEqual({
       children: [

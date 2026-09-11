@@ -964,14 +964,12 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  // Shell items whose `opencode run` already produced a task.started, so the
-  // repeated item.updated rows of one command do not restart the delegated
-  // run. Entries stay after completion, like task descriptions, so a
-  // redelivered terminal item cannot restart the run either.
-  const startedOpenCodeRunItemKeys = yield* Cache.make<string, boolean>({
+  // Retain terminal state so redelivered shell items cannot repeat the run's
+  // parent or child activities. Only advance state after derived events land.
+  const openCodeRunStateByItemKey = yield* Cache.make<string, "started" | "completed">({
     capacity: TASK_DESCRIPTION_BY_TASK_CACHE_CAPACITY,
     timeToLive: TASK_DESCRIPTION_BY_TASK_TTL,
-    lookup: () => Effect.succeed(false),
+    lookup: () => Effect.succeed("started" as const),
   });
 
   const resolveThreadRuntimeContext = Effect.fn("resolveThreadRuntimeContext")(function* (
@@ -2165,16 +2163,22 @@ const make = Effect.gen(function* () {
       if (itemKey === undefined) {
         return;
       }
-      const started = Option.getOrElse(
-        yield* Cache.getOption(startedOpenCodeRunItemKeys, itemKey),
-        () => false,
+      const state = Option.getOrUndefined(
+        yield* Cache.getOption(openCodeRunStateByItemKey, itemKey),
       );
-      const derived = deriveOpenCodeRunEvents(event, { started });
+      if (state === "completed") {
+        return;
+      }
+      const derived = deriveOpenCodeRunEvents(event, { started: state === "started" });
       if (derived.length === 0) {
         return;
       }
-      yield* Cache.set(startedOpenCodeRunItemKeys, itemKey, true);
       yield* Effect.forEach(derived, processRuntimeEvent, { discard: true });
+      yield* Cache.set(
+        openCodeRunStateByItemKey,
+        itemKey,
+        event.type === "item.completed" ? "completed" : "started",
+      );
     });
 
   const processInput = (input: RuntimeIngestionInput) =>
