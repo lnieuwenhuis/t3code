@@ -145,6 +145,12 @@ describe("parseOpenCodeRunCommand", () => {
     );
   });
 
+  it("finds a foreground run after an ignored background run", () => {
+    expect(
+      parseOpenCodeRunCommand("opencode run 'first' & opencode run --format json 'second'"),
+    ).toEqual({ prompt: "second", model: undefined, agent: undefined, jsonOutput: true });
+  });
+
   it("ignores runs the shell backgrounds with a trailing ampersand", () => {
     expect(parseOpenCodeRunCommand("opencode run 'Say hi' &")).toBeUndefined();
     expect(parseOpenCodeRunCommand("nohup opencode run 'Say hi' > run.log 2>&1 &")).toBeUndefined();

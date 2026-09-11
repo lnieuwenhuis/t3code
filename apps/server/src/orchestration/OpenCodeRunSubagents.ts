@@ -310,7 +310,10 @@ export function parseOpenCodeRunCommand(
     const subcommand = subcommandIndex(tokens, index + 1);
     const next = subcommand === undefined ? undefined : tokens[subcommand];
     if (next !== undefined && !next.quoted && next.text === "run") {
-      return parseInvocationTokens(tokens.slice(subcommand! + 1));
+      const invocation = parseInvocationTokens(tokens.slice(subcommand! + 1));
+      if (invocation) {
+        return invocation;
+      }
     }
   }
   if (depth >= MAX_NESTED_COMMAND_DEPTH) {
