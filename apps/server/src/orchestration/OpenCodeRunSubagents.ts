@@ -309,7 +309,7 @@ export function parseOpenCodeRunCommand(
     }
     const subcommand = subcommandIndex(tokens, index + 1);
     const next = subcommand === undefined ? undefined : tokens[subcommand];
-    if (next !== undefined && !next.quoted && next.text === "run") {
+    if (next !== undefined && next.text === "run") {
       const invocation = parseInvocationTokens(tokens.slice(subcommand! + 1));
       if (invocation) {
         return invocation;

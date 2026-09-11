@@ -145,6 +145,11 @@ describe("parseOpenCodeRunCommand", () => {
     );
   });
 
+  it("recognizes a quoted run subcommand", () => {
+    expect(parseOpenCodeRunCommand('opencode "run" "Say hi"')?.prompt).toBe("Say hi");
+    expect(parseOpenCodeRunCommand("opencode 'run' 'Say hi'")?.prompt).toBe("Say hi");
+  });
+
   it("finds a foreground run after an ignored background run", () => {
     expect(
       parseOpenCodeRunCommand("opencode run 'first' & opencode run --format json 'second'"),
