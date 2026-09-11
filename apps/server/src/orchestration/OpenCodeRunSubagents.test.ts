@@ -333,7 +333,7 @@ describe("deriveOpenCodeRunEvents", () => {
         threadId: base.threadId,
         turnId: base.turnId,
         createdAt: base.createdAt,
-        eventId: "evt-item.updated:opencode-run:1",
+        eventId: 'opencode-run:["thread-1","turn-1","tool-1"]:00000001',
         type: "task.started",
         payload: {
           taskId: "opencode-run:tool-1",
@@ -372,11 +372,11 @@ describe("deriveOpenCodeRunEvents", () => {
       { started: true },
     );
     expect(events.map((event) => [event.type, event.eventId])).toEqual([
-      ["task.started", "evt-item.completed:opencode-run:1"],
-      ["task.completed", "evt-item.completed:opencode-run:2"],
-      ["task.started", "evt-item.completed:opencode-run:3"],
-      ["task.completed", "evt-item.completed:opencode-run:4"],
-      ["task.completed", "evt-item.completed:opencode-run:5"],
+      ["task.started", 'opencode-run:["thread-1","turn-1","tool-1"]:00000002'],
+      ["task.completed", 'opencode-run:["thread-1","turn-1","tool-1"]:00000003'],
+      ["task.started", 'opencode-run:["thread-1","turn-1","tool-1"]:00000004'],
+      ["task.completed", 'opencode-run:["thread-1","turn-1","tool-1"]:00000005'],
+      ["task.completed", 'opencode-run:["thread-1","turn-1","tool-1"]:00000006'],
     ]);
     expect(events[0]?.payload).toEqual({
       taskId: "opencode-run:tool-1:ses_child_1",

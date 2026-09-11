@@ -37,7 +37,7 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as Tracer from "effect/Tracer";
 import { it as effectIt } from "@effect/vitest";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
@@ -1613,15 +1613,32 @@ describe("ProviderRuntimeIngestion", () => {
         },
       },
     };
+    const dispatch = harness.engine.dispatch;
+    let injectedFailure = false;
+    const dispatchSpy = vi.spyOn(harness.engine, "dispatch").mockImplementation((command) => {
+      if (
+        !injectedFailure &&
+        command.type === "thread.activity.append" &&
+        command.activity.kind === "task.completed"
+      ) {
+        injectedFailure = true;
+        return Effect.die("simulated failure after a child start was persisted");
+      }
+      return dispatch(command);
+    });
     await harness.emitAndDrain([
       completion,
       { ...completion, eventId: asEventId("evt-opencode-run-redelivered") },
+      { ...completion, eventId: asEventId("evt-opencode-run-redelivered-again") },
     ]);
+    dispatchSpy.mockRestore();
+    expect(injectedFailure).toBe(true);
 
     const thread = await waitForThread(harness.readModel, (entry) =>
       entry.activities.some(
         (activity: ProviderRuntimeTestActivity) =>
-          activity.id === "evt-opencode-run-completed:opencode-run:3",
+          activity.kind === "task.completed" &&
+          (activity.payload as Record<string, unknown>).taskId === "opencode-run:item-opencode-run",
       ),
     );
     const taskActivities = thread.activities
@@ -1638,7 +1655,8 @@ describe("ProviderRuntimeIngestion", () => {
     ]);
     const runCompleted = thread.activities.find(
       (activity: ProviderRuntimeTestActivity) =>
-        activity.id === "evt-opencode-run-completed:opencode-run:3",
+        activity.kind === "task.completed" &&
+        (activity.payload as Record<string, unknown>).taskId === "opencode-run:item-opencode-run",
     );
     expect(runCompleted?.payload).toMatchObject({
       status: "completed",

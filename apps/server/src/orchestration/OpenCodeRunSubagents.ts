@@ -643,9 +643,13 @@ export function deriveOpenCodeRunEvents(
       | { type: "task.started"; payload: TaskStartedEvent["payload"] }
       | { type: "task.completed"; payload: TaskCompletedEvent["payload"] },
   ) => {
+    // Reserve ordinal 1 for the parent start even when it was already emitted.
+    // Padding preserves lifecycle order when activities have equal timestamps.
     events.push({
       ...base,
-      eventId: EventId.make(`${item.eventId}:opencode-run:${events.length + 1}`),
+      eventId: EventId.make(
+        `opencode-run:${JSON.stringify([item.threadId, item.turnId ?? null, toolUseId])}:${String(events.length + 1 + (options.started ? 1 : 0)).padStart(8, "0")}`,
+      ),
       ...event,
     });
   };

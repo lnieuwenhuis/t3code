@@ -1483,7 +1483,7 @@ const make = Effect.gen(function* () {
     },
   );
 
-  const processRuntimeEvent = (event: ProviderRuntimeEvent) =>
+  const processRuntimeEvent = (event: ProviderRuntimeEvent, deduplicateActivity = false) =>
     Effect.gen(function* () {
       if (event.type === "content.delta" && event.payload.streamKind !== "assistant_text") {
         return;
@@ -2137,7 +2137,10 @@ const make = Effect.gen(function* () {
 
       const activities = runtimeEventToActivities(activityEvent, taskTitle);
       yield* Effect.forEach(activities, (activity) =>
-        providerCommandId(event, "thread-activity-append").pipe(
+        (deduplicateActivity
+          ? Effect.succeed(CommandId.make(`provider:${activity.id}:thread-activity-append`))
+          : providerCommandId(event, "thread-activity-append")
+        ).pipe(
           Effect.flatMap((commandId) =>
             orchestrationEngine.dispatch({
               type: "thread.activity.append",
@@ -2173,7 +2176,11 @@ const make = Effect.gen(function* () {
       if (derived.length === 0) {
         return;
       }
-      yield* Effect.forEach(derived, processRuntimeEvent, { discard: true });
+      // Stable synthetic identities let the existing command receipts suppress
+      // activities already persisted before a partial failure or redelivery.
+      yield* Effect.forEach(derived, (derivedEvent) => processRuntimeEvent(derivedEvent, true), {
+        discard: true,
+      });
       yield* Cache.set(
         openCodeRunStateByItemKey,
         itemKey,
