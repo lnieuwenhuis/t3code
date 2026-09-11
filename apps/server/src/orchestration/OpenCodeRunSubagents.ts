@@ -27,13 +27,14 @@ export interface OpenCodeRunInvocation {
 interface ShellToken {
   readonly text: string;
   readonly quoted: boolean;
+  readonly assignment?: boolean;
 }
 
 const MAX_PROMPT_LENGTH = 200;
 const MAX_NESTED_COMMAND_DEPTH = 2;
 const COMMAND_SEPARATOR = /^(\|\|?|&&|;|&)$/;
-const REDIRECT_PREFIX = /^\d*[<>]/;
-const REDIRECT_WITH_OPERAND = /^\d*(>>?|<)$/;
+const REDIRECT_PREFIX = /^(?:\d*[<>]|&>)/;
+const REDIRECT_WITH_OPERAND = /^(?:\d*(>>?|<)|&>>?)$/;
 const VALUE_OPTIONS = new Set([
   "-m",
   "--model",
@@ -63,14 +64,16 @@ function tokenizeShell(command: string): ShellToken[] {
   let text = "";
   let quoted = false;
   let inToken = false;
+  let assignment = false;
   let quote: '"' | "'" | null = null;
   const flush = () => {
     if (inToken) {
-      tokens.push({ text, quoted });
+      tokens.push({ text, quoted, assignment });
     }
     text = "";
     quoted = false;
     inToken = false;
+    assignment = false;
   };
   for (let index = 0; index < command.length; index += 1) {
     const char = command[index]!;
@@ -122,6 +125,13 @@ function tokenizeShell(command: string): ShellToken[] {
       flush();
       continue;
     }
+    if (char === "&" && command[index + 1] === ">") {
+      flush();
+      const append = command[index + 2] === ">";
+      tokens.push({ text: append ? "&>>" : "&>", quoted: false });
+      index += append ? 2 : 1;
+      continue;
+    }
     // Separators need no surrounding whitespace (`ls;opencode run`, `… |head`);
     // `&` stays attached inside redirects such as `2>&1`.
     if (char === ";" || char === "|" || (char === "&" && !text.endsWith(">"))) {
@@ -133,6 +143,9 @@ function tokenizeShell(command: string): ShellToken[] {
       }
       continue;
     }
+    if (char === "=" && !quoted && /^[A-Za-z_][A-Za-z0-9_]*$/.test(text)) {
+      assignment = true;
+    }
     text += char;
     inToken = true;
   }
@@ -140,18 +153,14 @@ function tokenizeShell(command: string): ShellToken[] {
   return tokens;
 }
 
-/** Basename of an unquoted token, so `/usr/local/bin/opencode` reads as `opencode`. */
+/** Executable basename after shell quote removal. */
 function executableName(token: ShellToken): string | undefined {
-  if (token.quoted) {
-    return undefined;
-  }
   const slash = token.text.lastIndexOf("/");
   return slash === -1 ? token.text : token.text.slice(slash + 1);
 }
 
 const SHELL_EXECUTABLES = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish"]);
 const SHELL_COMMAND_FLAG = /^-[a-zA-Z]*c[a-zA-Z]*$/;
-const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const DURATION_OR_NUMBER = /^\d+(\.\d+)?[smhd]?$/;
 // Wrappers that run their trailing argv as the real command.
 const TRANSPARENT_WRAPPERS = new Set(["env", "exec", "nohup", "time", "timeout", "command"]);
@@ -165,14 +174,11 @@ const TRANSPARENT_WRAPPERS = new Set(["env", "exec", "nohup", "time", "timeout",
 function startsSimpleCommand(tokens: ReadonlyArray<ShellToken>, index: number): boolean {
   for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
     const token = tokens[cursor]!;
-    if (token.quoted) {
-      return false;
-    }
-    if (COMMAND_SEPARATOR.test(token.text)) {
+    if (!token.quoted && COMMAND_SEPARATOR.test(token.text)) {
       return true;
     }
     if (
-      ENV_ASSIGNMENT.test(token.text) ||
+      token.assignment ||
       token.text.startsWith("-") ||
       DURATION_OR_NUMBER.test(token.text) ||
       TRANSPARENT_WRAPPERS.has(executableName(token) ?? "")
@@ -191,10 +197,10 @@ function isShellWrapperScript(tokens: ReadonlyArray<ShellToken>, index: number):
   return (
     tokens[index]!.quoted &&
     flag !== undefined &&
-    !flag.quoted &&
     SHELL_COMMAND_FLAG.test(flag.text) &&
     shell !== undefined &&
-    SHELL_EXECUTABLES.has(executableName(shell) ?? "")
+    SHELL_EXECUTABLES.has(executableName(shell) ?? "") &&
+    startsSimpleCommand(tokens, index - 2)
   );
 }
 
@@ -237,7 +243,7 @@ function parseInvocationTokens(
         continue;
       }
     }
-    if (optionsEnded || token.quoted || !token.text.startsWith("-")) {
+    if (optionsEnded || !token.text.startsWith("-")) {
       positionals.push(token.text);
       continue;
     }
@@ -282,7 +288,7 @@ function subcommandIndex(tokens: ReadonlyArray<ShellToken>, start: number): numb
   let cursor = start;
   while (cursor < tokens.length) {
     const token = tokens[cursor]!;
-    if (token.quoted || !token.text.startsWith("-")) {
+    if (!token.text.startsWith("-")) {
       return cursor;
     }
     cursor += GLOBAL_VALUE_OPTIONS.has(token.text) ? 2 : 1;

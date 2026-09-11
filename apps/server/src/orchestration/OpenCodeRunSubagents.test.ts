@@ -109,6 +109,35 @@ const runJsonOutput = [
 ].join("\n");
 
 describe("parseOpenCodeRunCommand", () => {
+  it("recognizes quoted executable and option words", () => {
+    expect(
+      parseOpenCodeRunCommand('"opencode" "--log-level" DEBUG "run" "--format" json "prompt"'),
+    ).toMatchObject({ prompt: "prompt", jsonOutput: true });
+    expect(parseOpenCodeRunCommand('opencode run -- "--format" json')).toMatchObject({
+      prompt: "--format json",
+      jsonOutput: false,
+    });
+  });
+
+  it("recognizes assignments with quoted values but not quoted assignment words", () => {
+    expect(
+      parseOpenCodeRunCommand('OPENCODE_CONFIG="/tmp/config with spaces" opencode run test')
+        ?.prompt,
+    ).toBe("test");
+    expect(parseOpenCodeRunCommand('"OPENCODE_CONFIG=value" opencode run test')).toBeUndefined();
+  });
+
+  it("recognizes combined output redirects without treating them as background runs", () => {
+    for (const redirect of ["&>run.log", "&>>run.log", '&> "run log"']) {
+      expect(parseOpenCodeRunCommand(`opencode run test ${redirect}`)?.prompt).toBe("test");
+    }
+  });
+
+  it("only parses wrapper scripts when the shell is executed", () => {
+    expect(parseOpenCodeRunCommand('echo zsh -c "opencode run do work"')).toBeUndefined();
+    expect(parseOpenCodeRunCommand('"zsh" "-c" "opencode run do work"')?.prompt).toBe("do work");
+  });
+
   it("reads the prompt, model, agent, and output format", () => {
     expect(
       parseOpenCodeRunCommand(
