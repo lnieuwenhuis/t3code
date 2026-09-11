@@ -57,6 +57,7 @@ const VALUE_OPTIONS = new Set([
 // value when it does not look like another option.
 const OPTIONAL_VALUE_OPTIONS = new Set(["--title", "--port"]);
 
+/** Splits a command line into words, honoring quotes, escapes, and separators. */
 function tokenizeShell(command: string): ShellToken[] {
   const tokens: ShellToken[] = [];
   let text = "";
@@ -139,6 +140,7 @@ function tokenizeShell(command: string): ShellToken[] {
   return tokens;
 }
 
+/** Basename of an unquoted token, so `/usr/local/bin/opencode` reads as `opencode`. */
 function executableName(token: ShellToken): string | undefined {
   if (token.quoted) {
     return undefined;
@@ -196,6 +198,7 @@ function isShellWrapperScript(tokens: ReadonlyArray<ShellToken>, index: number):
   );
 }
 
+/** Joins positional words into a compact prompt, or nothing when it is not readable. */
 function normalizePrompt(parts: ReadonlyArray<string>): string | undefined {
   const joined = parts.join(" ").replace(/\s+/g, " ").trim();
   // Command substitutions and heredocs carry no readable prompt.
@@ -274,6 +277,7 @@ function parseInvocationTokens(
 // DEBUG run …`. Only `--log-level` takes a separate value.
 const GLOBAL_VALUE_OPTIONS = new Set(["--log-level"]);
 
+/** Index of the first non-option token after the binary, i.e. the subcommand. */
 function subcommandIndex(tokens: ReadonlyArray<ShellToken>, start: number): number | undefined {
   let cursor = start;
   while (cursor < tokens.length) {
@@ -323,16 +327,19 @@ export function parseOpenCodeRunCommand(
   return undefined;
 }
 
+/** Narrows an unknown value to a plain object record. */
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
 }
 
+/** Narrows an unknown value to a string. */
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+/** Rounds a finite non-negative number, rejecting anything else. */
 function asNonNegativeInt(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? Math.round(value)
@@ -354,10 +361,12 @@ function commandFromItemData(data: Record<string, unknown> | undefined): string 
   );
 }
 
+/** Claude's Bash tool returns at once for `run_in_background`, so its output is elsewhere. */
 function isBackgroundShellItem(data: Record<string, unknown> | undefined): boolean {
   return asRecord(data?.input)?.run_in_background === true;
 }
 
+/** Text of a tool result `content`, which is a string or an array of text blocks. */
 function textFromContent(content: unknown): string | undefined {
   if (typeof content === "string") {
     return content;
@@ -372,6 +381,7 @@ function textFromContent(content: unknown): string | undefined {
   return undefined;
 }
 
+/** Captured command output from each provider's `data` shape, if the item carries any. */
 function outputFromItemData(data: Record<string, unknown> | undefined): string | undefined {
   if (!data) {
     return undefined;
@@ -419,6 +429,7 @@ interface OpenCodeRunOutput {
 const TASK_OUTPUT_WRAPPER =
   /^<task[^>]*>\s*(?:<summary>[\s\S]*?<\/summary>\s*)?<task_(?:result|error)>\s*([\s\S]*?)\s*<\/task_(?:result|error)>\s*<\/task>\s*$/;
 
+/** Result text of a child task, unwrapped from OpenCode's `<task>` envelope. */
 function childSummary(output: unknown, error: unknown): string | undefined {
   const text = asString(error) ?? asString(output);
   if (!text) {
@@ -429,6 +440,7 @@ function childSummary(output: unknown, error: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+/** One settled child agent from a completed OpenCode `task` tool part. */
 function childFromTaskPart(part: Record<string, unknown>, fallbackId: string): OpenCodeRunChild {
   const state = asRecord(part.state) ?? {};
   const input = asRecord(state.input) ?? {};
@@ -547,6 +559,7 @@ type CommandItemEvent = Extract<
   { type: "item.started" | "item.updated" | "item.completed" }
 >;
 
+/** The event when it is a shell item lifecycle event with an item id. */
 function asCommandItemEvent(event: ProviderRuntimeEvent): CommandItemEvent | undefined {
   if (
     (event.type !== "item.started" &&
@@ -566,6 +579,7 @@ export function openCodeRunItemKey(event: ProviderRuntimeEvent): string | undefi
   return item ? `${item.threadId}:${item.itemId}` : undefined;
 }
 
+/** Identity fields shared by every task event of one delegated run. */
 function taskLinkage(invocation: OpenCodeRunInvocation, toolUseId: string) {
   return {
     taskType: "subagent",
