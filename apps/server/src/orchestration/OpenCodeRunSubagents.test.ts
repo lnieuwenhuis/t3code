@@ -136,6 +136,21 @@ describe("parseOpenCodeRunCommand", () => {
     ).toEqual({ prompt: "Review the diff", model: undefined, agent: undefined, jsonOutput: true });
   });
 
+  it("skips global options placed before the subcommand", () => {
+    expect(
+      parseOpenCodeRunCommand("opencode --print-logs --log-level DEBUG run 'Say hi'")?.prompt,
+    ).toBe("Say hi");
+    expect(parseOpenCodeRunCommand("opencode --log-level=DEBUG run 'Say hi'")?.prompt).toBe(
+      "Say hi",
+    );
+  });
+
+  it("ignores runs the shell backgrounds with a trailing ampersand", () => {
+    expect(parseOpenCodeRunCommand("opencode run 'Say hi' &")).toBeUndefined();
+    expect(parseOpenCodeRunCommand("nohup opencode run 'Say hi' > run.log 2>&1 &")).toBeUndefined();
+    expect(parseOpenCodeRunCommand("opencode run 'Say hi' && echo done")?.prompt).toBe("Say hi");
+  });
+
   it("drops prompts built from command substitution", () => {
     expect(parseOpenCodeRunCommand('opencode run "$(cat prompt.md)"')?.prompt).toBeUndefined();
   });

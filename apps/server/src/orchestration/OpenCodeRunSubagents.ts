@@ -207,13 +207,23 @@ function normalizePrompt(parts: ReadonlyArray<string>): string | undefined {
     : joined;
 }
 
-function parseInvocationTokens(tokens: ReadonlyArray<ShellToken>): OpenCodeRunInvocation {
+/**
+ * Parses the argv after `opencode run`. Returns undefined when the shell
+ * backgrounds the run with a trailing `&`: the shell item then returns while
+ * OpenCode is still working, so there is no lifecycle to mirror.
+ */
+function parseInvocationTokens(
+  tokens: ReadonlyArray<ShellToken>,
+): OpenCodeRunInvocation | undefined {
   const positionals: string[] = [];
   const options = new Map<string, string>();
   let optionsEnded = false;
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index]!;
     if (!token.quoted) {
+      if (token.text === "&") {
+        return undefined;
+      }
       if (COMMAND_SEPARATOR.test(token.text)) {
         break;
       }
@@ -260,6 +270,22 @@ function parseInvocationTokens(tokens: ReadonlyArray<ShellToken>): OpenCodeRunIn
   };
 }
 
+// Options the CLI accepts before the subcommand, e.g. `opencode --log-level
+// DEBUG run …`. Only `--log-level` takes a separate value.
+const GLOBAL_VALUE_OPTIONS = new Set(["--log-level"]);
+
+function subcommandIndex(tokens: ReadonlyArray<ShellToken>, start: number): number | undefined {
+  let cursor = start;
+  while (cursor < tokens.length) {
+    const token = tokens[cursor]!;
+    if (token.quoted || !token.text.startsWith("-")) {
+      return cursor;
+    }
+    cursor += GLOBAL_VALUE_OPTIONS.has(token.text) ? 2 : 1;
+  }
+  return undefined;
+}
+
 /**
  * Recognizes an `opencode run …` invocation anywhere in a shell command line,
  * including behind `cd … &&`, env assignments, or a wrapper such as
@@ -274,14 +300,13 @@ export function parseOpenCodeRunCommand(
   }
   const tokens = tokenizeShell(command);
   for (let index = 0; index + 1 < tokens.length; index += 1) {
-    const next = tokens[index + 1]!;
-    if (
-      executableName(tokens[index]!) === "opencode" &&
-      !next.quoted &&
-      next.text === "run" &&
-      startsSimpleCommand(tokens, index)
-    ) {
-      return parseInvocationTokens(tokens.slice(index + 2));
+    if (executableName(tokens[index]!) !== "opencode" || !startsSimpleCommand(tokens, index)) {
+      continue;
+    }
+    const subcommand = subcommandIndex(tokens, index + 1);
+    const next = subcommand === undefined ? undefined : tokens[subcommand];
+    if (next !== undefined && !next.quoted && next.text === "run") {
+      return parseInvocationTokens(tokens.slice(subcommand! + 1));
     }
   }
   if (depth >= MAX_NESTED_COMMAND_DEPTH) {
