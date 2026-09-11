@@ -52,6 +52,7 @@ import { projectActivityPayload } from "../ActivityPayloadProjection.ts";
 import { forkParked } from "../../serverActivation.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { canReplaceThreadTitle } from "../threadTitles.ts";
+import { deriveOpenCodeRunEvents, openCodeRunItemKey } from "../OpenCodeRunSubagents.ts";
 
 const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${turnId}`;
 const providerTaskKey = (threadId: ThreadId, taskId: string) => `${threadId}:${taskId}`;
@@ -962,6 +963,16 @@ const make = Effect.gen(function* () {
         Option.filter(description, (value) => value.length > 0).pipe(Option.getOrUndefined),
       ),
     );
+
+  // Shell items whose `opencode run` already produced a task.started, so the
+  // repeated item.updated rows of one command do not restart the delegated
+  // run. Entries stay after completion, like task descriptions, so a
+  // redelivered terminal item cannot restart the run either.
+  const startedOpenCodeRunItemKeys = yield* Cache.make<string, boolean>({
+    capacity: TASK_DESCRIPTION_BY_TASK_CACHE_CAPACITY,
+    timeToLive: TASK_DESCRIPTION_BY_TASK_TTL,
+    lookup: () => Effect.succeed(false),
+  });
 
   const resolveThreadRuntimeContext = Effect.fn("resolveThreadRuntimeContext")(function* (
     threadId: ThreadId,
@@ -2144,8 +2155,32 @@ const make = Effect.gen(function* () {
 
   const processDomainEvent = (_event: TurnStartRequestedDomainEvent) => Effect.void;
 
+  // A shell item that runs `opencode run` is also a delegated agent: after
+  // the item's own activity lands, feed the derived task.* events through the
+  // same path so liveness, titles, and the Agents roster all follow.
+  const processRuntimeEventWithOpenCodeRuns = (event: ProviderRuntimeEvent) =>
+    Effect.gen(function* () {
+      yield* processRuntimeEvent(event);
+      const itemKey = openCodeRunItemKey(event);
+      if (itemKey === undefined) {
+        return;
+      }
+      const started = Option.getOrElse(
+        yield* Cache.getOption(startedOpenCodeRunItemKeys, itemKey),
+        () => false,
+      );
+      const derived = deriveOpenCodeRunEvents(event, { started });
+      if (derived.length === 0) {
+        return;
+      }
+      yield* Cache.set(startedOpenCodeRunItemKeys, itemKey, true);
+      yield* Effect.forEach(derived, processRuntimeEvent, { discard: true });
+    });
+
   const processInput = (input: RuntimeIngestionInput) =>
-    input.source === "runtime" ? processRuntimeEvent(input.event) : processDomainEvent(input.event);
+    input.source === "runtime"
+      ? processRuntimeEventWithOpenCodeRuns(input.event)
+      : processDomainEvent(input.event);
 
   const processInputSafely = (input: RuntimeIngestionInput) =>
     processInput(input).pipe(
