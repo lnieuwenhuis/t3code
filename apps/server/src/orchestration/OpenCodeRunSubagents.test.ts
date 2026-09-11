@@ -152,6 +152,15 @@ describe("parseOpenCodeRunCommand", () => {
     expect(parseOpenCodeRunCommand("timeout 60 opencode run 'Say hi'")?.prompt).toBe("Say hi");
     expect(parseOpenCodeRunCommand("env FOO=1 nohup opencode run 'Say hi'")?.prompt).toBe("Say hi");
     expect(parseOpenCodeRunCommand("ls;opencode run 'Say hi'|head 2>&1")?.prompt).toBe("Say hi");
+    expect(parseOpenCodeRunCommand('cd /repo\nopencode run "Say hi"\necho done')?.prompt).toBe(
+      "Say hi",
+    );
+    expect(parseOpenCodeRunCommand('opencode run \\\n  --format json \\\n  "Say hi"')).toEqual({
+      prompt: "Say hi",
+      model: undefined,
+      agent: undefined,
+      jsonOutput: true,
+    });
   });
 });
 

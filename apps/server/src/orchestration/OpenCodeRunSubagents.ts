@@ -110,6 +110,13 @@ function tokenizeShell(command: string): ShellToken[] {
       }
       continue;
     }
+    if (char === "\n") {
+      // An unquoted newline ends the command like `;` does, so a multi-line
+      // script still starts a fresh simple command on the next line.
+      flush();
+      tokens.push({ text: ";", quoted: false });
+      continue;
+    }
     if (/\s/.test(char)) {
       flush();
       continue;
