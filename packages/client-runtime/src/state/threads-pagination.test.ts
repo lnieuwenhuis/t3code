@@ -630,8 +630,10 @@ describe("thread pagination state", () => {
           false,
         );
 
-        // The first two cases cross the watermark inside a run; 138 places
-        // it at the 128-item slice boundary. One queue offer delivers a backlog.
+        // The final title event reaches the watermark (item 128 when it is
+        // 138). The next item intentionally replays that same sequence and
+        // must be ignored, including across the slice boundary. Only the
+        // following, newer message delta should append to the merged page.
         yield* Queue.offerAll(harness.inputs, [
           ...Array.from({ length: watermark - 10 }, (_, index) =>
             titleEvent(`Title ${index}`, 11 + index),
