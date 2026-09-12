@@ -34,7 +34,7 @@ const MAX_PROMPT_LENGTH = 200;
 const MAX_NESTED_COMMAND_DEPTH = 2;
 const COMMAND_SEPARATOR = /^(\|\|?|&&|;|&)$/;
 const REDIRECT_PREFIX = /^(?:\d*[<>]|&>)/;
-const REDIRECT_WITH_OPERAND = /^(?:\d*(>>?|<)|&>>?)$/;
+const REDIRECT_WITH_OPERAND = /^(?:\d*(>>?|<|<<-?|<<<)|&>>?)$/;
 const VALUE_OPTIONS = new Set([
   "-m",
   "--model",
@@ -66,9 +66,15 @@ function tokenizeShell(command: string): ShellToken[] {
   let inToken = false;
   let assignment = false;
   let quote: '"' | "'" | null = null;
+  const hereDocuments: Array<{ delimiter: string; stripTabs: boolean }> = [];
+  let awaitingHereDocument: { stripTabs: boolean } | undefined;
   const flush = () => {
     if (inToken) {
       tokens.push({ text, quoted, assignment });
+      if (awaitingHereDocument) {
+        hereDocuments.push({ delimiter: text, ...awaitingHereDocument });
+        awaitingHereDocument = undefined;
+      }
     }
     text = "";
     quoted = false;
@@ -115,10 +121,36 @@ function tokenizeShell(command: string): ShellToken[] {
       continue;
     }
     if (char === "\n") {
-      // An unquoted newline ends the command like `;` does, so a multi-line
-      // script still starts a fresh simple command on the next line.
       flush();
       tokens.push({ text: ";", quoted: false });
+      // Bodies begin after the command line, in redirect order. Their contents
+      // are input data, not shell commands; quote removal already decoded each
+      // delimiter in flush(). An unfinished body consumes the remaining input.
+      for (const { delimiter, stripTabs } of hereDocuments) {
+        let start = index + 1;
+        while (start < command.length) {
+          const newline = command.indexOf("\n", start);
+          const end = newline === -1 ? command.length : newline;
+          const line = command.slice(start, end);
+          index = end;
+          if ((stripTabs ? line.replace(/^\t+/, "") : line) === delimiter) {
+            break;
+          }
+          start = end + 1;
+        }
+      }
+      hereDocuments.length = 0;
+      continue;
+    }
+    if (char === "<" && command[index + 1] === "<") {
+      flush();
+      const suffix = command[index + 2];
+      const operator = suffix === "<" ? "<<<" : suffix === "-" ? "<<-" : "<<";
+      tokens.push({ text: operator, quoted: false });
+      if (operator !== "<<<") {
+        awaitingHereDocument = { stripTabs: operator === "<<-" };
+      }
+      index += operator.length - 1;
       continue;
     }
     if (/\s/.test(char)) {
@@ -202,6 +234,20 @@ function isShellWrapperScript(tokens: ReadonlyArray<ShellToken>, index: number):
     SHELL_EXECUTABLES.has(executableName(shell) ?? "") &&
     startsSimpleCommand(tokens, index - 2)
   );
+}
+
+/** An asynchronous outer shell list cannot mirror a nested run's lifetime. */
+function isBackgroundShellWrapper(tokens: ReadonlyArray<ShellToken>, index: number): boolean {
+  for (let cursor = index + 1; cursor < tokens.length; cursor += 1) {
+    const token = tokens[cursor]!;
+    if (!token.quoted && token.text === "&") {
+      return true;
+    }
+    if (!token.quoted && token.text === ";") {
+      return false;
+    }
+  }
+  return false;
 }
 
 /** Joins positional words into a compact prompt, or nothing when it is not readable. */
@@ -326,7 +372,7 @@ export function parseOpenCodeRunCommand(
     return undefined;
   }
   for (let index = 2; index < tokens.length; index += 1) {
-    if (isShellWrapperScript(tokens, index)) {
+    if (isShellWrapperScript(tokens, index) && !isBackgroundShellWrapper(tokens, index)) {
       const nested = parseOpenCodeRunCommand(tokens[index]!.text, depth + 1);
       if (nested) {
         return nested;

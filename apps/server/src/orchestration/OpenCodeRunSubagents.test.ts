@@ -138,6 +138,33 @@ describe("parseOpenCodeRunCommand", () => {
     expect(parseOpenCodeRunCommand('"zsh" "-c" "opencode run do work"')?.prompt).toBe("do work");
   });
 
+  it.each(["EOF", "'EOF'", '"EOF"', "E'OF'", "\\EOF"])(
+    "ignores heredoc body commands with delimiter %s and resumes after the body",
+    (delimiter) => {
+      const script = `cat <<${delimiter}\nopencode run --format json 'example only'\nEOF`;
+      expect(parseOpenCodeRunCommand(script)).toBeUndefined();
+      expect(parseOpenCodeRunCommand(`${script}\nopencode run real`)?.prompt).toBe("real");
+    },
+  );
+
+  it("skips tab-stripped and multiple heredoc bodies", () => {
+    expect(parseOpenCodeRunCommand("cat <<-EOF\n\topencode run fake\n\tEOF")).toBeUndefined();
+    expect(
+      parseOpenCodeRunCommand("cat <<ONE <<'TWO'\nfirst\nONE\nopencode run fake\nTWO"),
+    ).toBeUndefined();
+    expect(parseOpenCodeRunCommand("cat <<EOF\nopencode run incomplete")).toBeUndefined();
+    expect(parseOpenCodeRunCommand("opencode run real <<'EOF'\nexample\nEOF")?.prompt).toBe("real");
+  });
+
+  it("ignores background shell wrappers but finds subsequent foreground wrappers", () => {
+    expect(parseOpenCodeRunCommand("sh -c 'opencode run test' &")).toBeUndefined();
+    expect(parseOpenCodeRunCommand("sh -c 'opencode run test' >out 2>&1 &")).toBeUndefined();
+    expect(parseOpenCodeRunCommand("sh -c 'opencode run test' | cat &")).toBeUndefined();
+    expect(
+      parseOpenCodeRunCommand("sh -c 'opencode run first' & sh -c 'opencode run second'")?.prompt,
+    ).toBe("second");
+  });
+
   it("reads the prompt, model, agent, and output format", () => {
     expect(
       parseOpenCodeRunCommand(
