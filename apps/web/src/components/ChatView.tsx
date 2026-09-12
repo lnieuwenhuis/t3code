@@ -2773,7 +2773,7 @@ export default function ChatView(props: ChatViewProps) {
         : null,
     [activePendingDraftAnswers, activePendingQuestionIndex, activePendingUserInput],
   );
-  const { returnTextToComposerDraft, beginSubmission: beginPendingUserInputSubmission } =
+  const { returnQuestionTextToComposerDraft, beginSubmission: beginPendingUserInputSubmission } =
     usePendingUserInputDraft({
       composerDraftTarget,
       activePendingUserInput,
@@ -7333,7 +7333,7 @@ export default function ChatView(props: ChatViewProps) {
       // Choosing an option replaces typed text as the answer, but the text
       // may be the draft carried in when the question appeared, so it goes
       // back to the draft instead of being discarded.
-      returnTextToComposerDraft(
+      returnQuestionTextToComposerDraft(
         activePendingUserInput.requestId,
         activePendingDraftAnswers[questionId]?.customAnswer ?? "",
         composerDraftTarget,
@@ -7370,7 +7370,7 @@ export default function ChatView(props: ChatViewProps) {
       activePendingRequestKey,
       composerDraftTarget,
       composerRef,
-      returnTextToComposerDraft,
+      returnQuestionTextToComposerDraft,
     ],
   );
 

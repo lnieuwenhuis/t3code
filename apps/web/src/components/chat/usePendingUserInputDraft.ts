@@ -86,6 +86,26 @@ export function usePendingUserInputDraft({
     },
     [setComposerDraftPrompt],
   );
+  // An option returns only one question's text. Move it into the unrelated
+  // draft while retaining tracking for the other answers; the following answer
+  // state update synchronizes their complete remaining set in the layout effect.
+  const returnQuestionTextToComposerDraft = useCallback(
+    (requestId: string, text: string, draftTarget: ScopedThreadRef | DraftId) => {
+      if (text.trim().length === 0) return;
+      const requestKey = pendingUserInputRequestKey(draftTarget, requestId);
+      const carried = carriedComposerDraftByRequestIdRef.current.get(requestKey);
+      const draftPrompt =
+        useComposerDraftStore.getState().getComposerDraft(draftTarget)?.prompt ?? "";
+      const unrelatedText =
+        carried && draftPrompt === carried.text ? carried.unrelatedText : draftPrompt;
+      carriedComposerDraftByRequestIdRef.current.set(requestKey, {
+        text: draftPrompt,
+        unrelatedText:
+          mergeComposerDraftPromptWithPendingAnswer(unrelatedText, text) ?? unrelatedText,
+      });
+    },
+    [],
+  );
   // Merges a request's typed custom answers into a thread's composer draft.
   // Answers by request id are never pruned, so they stay readable after the
   // request itself has disappeared.
@@ -264,5 +284,5 @@ export function usePendingUserInputDraft({
     },
     [composerDraftTarget, pendingUserInputAnswersByRequestId, setComposerDraftPrompt],
   );
-  return { returnTextToComposerDraft, beginSubmission };
+  return { returnQuestionTextToComposerDraft, beginSubmission };
 }

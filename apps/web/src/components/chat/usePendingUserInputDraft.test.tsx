@@ -22,6 +22,7 @@ let composer: {
   target: ScopedThreadRef;
   answer: string;
   edit: (value: string, questionId?: string) => void;
+  selectOption: (questionId: string) => void;
   submit: (response: Promise<void>) => Promise<void>;
 };
 
@@ -57,6 +58,20 @@ function Composer({
           [key]: {
             ...existing[key],
             [questionId]: setPendingUserInputCustomAnswer(existing[key]?.[questionId], value),
+          },
+        }));
+      },
+      selectOption(questionId) {
+        lifecycle.returnQuestionTextToComposerDraft(
+          request.requestId,
+          answers[key]?.[questionId]?.customAnswer ?? "",
+          target,
+        );
+        setAnswers((existing) => ({
+          ...existing,
+          [key]: {
+            ...existing[key],
+            [questionId]: { customAnswer: "", selectedOptionValues: ["selected"] },
           },
         }));
       },
@@ -204,6 +219,39 @@ describe("pending answer draft ownership through mounted navigation", () => {
       await navigate(threadB, false);
       await navigate(threadA, false);
       expect(prompt()).toBe(questionId === "question" ? "answer two" : "answer one");
+    },
+  );
+
+  it.each(["disappear", "edit", "erase", "retry"])(
+    "retains other answers and unrelated text after choosing an option then %s",
+    async (nextAction) => {
+      await act(() => composer.edit("answer one"));
+      await act(() => composer.edit("answer two", "question-two"));
+      useComposerDraftStore.getState().setPrompt(ownerA, "unrelated draft");
+      await act(() => composer.submit(Promise.reject(new Error("response failed"))));
+      await act(() => composer.selectOption("question"));
+      expect(prompt()).toBe("unrelated draft\n\nanswer one\n\nanswer two");
+      await navigate(threadB, false);
+      if (nextAction !== "disappear") {
+        await navigate(threadA, true);
+        if (nextAction === "retry") {
+          await act(() => composer.submit(Promise.resolve()));
+        } else {
+          await act(() =>
+            composer.edit(nextAction === "edit" ? "updated answer two" : "", "question-two"),
+          );
+        }
+        await navigate(threadB, false);
+      }
+      await navigate(threadA, false);
+      expect(prompt()).toBe(
+        "unrelated draft\n\nanswer one" +
+          (nextAction === "disappear"
+            ? "\n\nanswer two"
+            : nextAction === "edit"
+              ? "\n\nupdated answer two"
+              : ""),
+      );
     },
   );
 
