@@ -489,8 +489,8 @@ describe("deriveOpenCodeRunEvents", () => {
     });
   });
 
-  it.each(["stdout", "output"])(
-    "reads rawOutput.%s when item metadata has no aggregated output",
+  it.each(["stdout", "output", "content"])(
+    "reads fallback %s when item metadata has no aggregated output",
     (outputKey) => {
       const events = deriveOpenCodeRunEvents(
         {
@@ -500,7 +500,12 @@ describe("deriveOpenCodeRunEvents", () => {
           payload: {
             itemType: "command_execution",
             status: "completed",
-            data: { item: { command, exitCode: 0 }, rawOutput: { [outputKey]: runJsonOutput } },
+            data: {
+              item: { command, exitCode: 0 },
+              ...(outputKey === "content"
+                ? { content: [{ type: "text", text: runJsonOutput }] }
+                : { rawOutput: { [outputKey]: runJsonOutput } }),
+            },
           },
         },
         { started: true },
@@ -513,6 +518,25 @@ describe("deriveOpenCodeRunEvents", () => {
       });
     },
   );
+
+  it("preserves an explicitly empty aggregated output over fallbacks", () => {
+    const events = deriveOpenCodeRunEvents(
+      {
+        ...base,
+        type: "item.completed",
+        eventId: EventId.make("evt-empty-output"),
+        payload: {
+          itemType: "command_execution",
+          status: "completed",
+          data: { item: { command, aggregatedOutput: "" }, rawOutput: { stdout: runJsonOutput } },
+        },
+      },
+      { started: true },
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]?.payload).not.toHaveProperty("summary");
+    expect(events[0]?.payload).not.toHaveProperty("typedUsage");
+  });
 
   it("reads Codex and ACP shaped command items", () => {
     const codex = deriveOpenCodeRunEvents(
