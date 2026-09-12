@@ -455,7 +455,13 @@ function textFromContent(content: unknown): string | undefined {
   }
   if (Array.isArray(content)) {
     const text = content
-      .map((block) => asString(asRecord(block)?.text))
+      .map((block) => {
+        const record = asRecord(block);
+        const nested = record?.type === "content" ? asRecord(record.content) : undefined;
+        return (
+          asString(record?.text) ?? (nested?.type === "text" ? asString(nested.text) : undefined)
+        );
+      })
       .filter((value): value is string => value !== undefined)
       .join("\n");
     return text.length > 0 ? text : undefined;

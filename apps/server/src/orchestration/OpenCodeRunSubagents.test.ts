@@ -1,3 +1,4 @@
+import type { ToolCallContent } from "effect-acp/schema";
 import {
   EventId,
   ProviderDriverKind,
@@ -500,7 +501,7 @@ describe("deriveOpenCodeRunEvents", () => {
     });
   });
 
-  it.each(["stdout", "output", "content"])(
+  it.each(["stdout", "output", "content", "acp"])(
     "reads fallback %s when item metadata has no aggregated output",
     (outputKey) => {
       const events = deriveOpenCodeRunEvents(
@@ -515,7 +516,13 @@ describe("deriveOpenCodeRunEvents", () => {
               item: { command, exitCode: 0 },
               ...(outputKey === "content"
                 ? { content: [{ type: "text", text: runJsonOutput }] }
-                : { rawOutput: { [outputKey]: runJsonOutput } }),
+                : outputKey === "acp"
+                  ? {
+                      content: [
+                        { type: "content", content: { type: "text", text: runJsonOutput } },
+                      ] satisfies ToolCallContent[],
+                    }
+                  : { rawOutput: { [outputKey]: runJsonOutput } }),
             },
           },
         },
