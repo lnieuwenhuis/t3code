@@ -179,6 +179,23 @@ describe("parseOpenCodeRunCommand", () => {
     );
   });
 
+  it("separates attached redirects from arguments without changing quoted or escaped text", () => {
+    for (const redirect of [">run.log", ">>run.log", "<input.txt", " 2>run.log", " 2>&1", "<&0"]) {
+      expect(parseOpenCodeRunCommand(`opencode run 'review this'${redirect}`)?.prompt).toBe(
+        "review this",
+      );
+      expect(parseOpenCodeRunCommand(`opencode run --format json${redirect}`)?.jsonOutput).toBe(
+        true,
+      );
+    }
+    expect(parseOpenCodeRunCommand("opencode run 'a>b' a\\>b")?.prompt).toBe("a>b a>b");
+    expect(parseOpenCodeRunCommand("opencode run '2'>run.log")?.prompt).toBe("2");
+    expect(parseOpenCodeRunCommand("opencode run \\>literal \\2>run.log")?.prompt).toBe(
+      ">literal 2",
+    );
+    expect(parseOpenCodeRunCommand("opencode run real 2>&1 &")).toBeUndefined();
+  });
+
   it("reads the prompt, model, agent, and output format", () => {
     expect(
       parseOpenCodeRunCommand(

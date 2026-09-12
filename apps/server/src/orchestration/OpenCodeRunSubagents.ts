@@ -34,7 +34,7 @@ const MAX_PROMPT_LENGTH = 200;
 const MAX_NESTED_COMMAND_DEPTH = 2;
 const COMMAND_SEPARATOR = /^(\|\|?|&&|;|&)$/;
 const REDIRECT_PREFIX = /^(?:\d*[<>]|&>)/;
-const REDIRECT_WITH_OPERAND = /^(?:\d*(>>?|<|<<-?|<<<)|&>>?)$/;
+const REDIRECT_WITH_OPERAND = /^(?:\d*(>>?|<|<<-?|<<<|[<>]&)|&>>?)$/;
 const VALUE_OPTIONS = new Set([
   "-m",
   "--model",
@@ -116,6 +116,7 @@ function tokenizeShell(command: string): ShellToken[] {
       const next = command[index]!;
       if (next !== "\n") {
         text += next;
+        quoted = true;
         inToken = true;
       }
       continue;
@@ -149,12 +150,28 @@ function tokenizeShell(command: string): ShellToken[] {
       hereDocuments.length = 0;
       continue;
     }
-    if (char === "<" && command[index + 1] === "<") {
+    if (char === "<" || char === ">") {
+      // Only an unquoted all-digit word immediately before the operator is
+      // a file descriptor; quoted digits remain ordinary command arguments.
+      const descriptor = inToken && !quoted && /^\d+$/.test(text) ? text : "";
+      if (descriptor) {
+        inToken = false;
+      }
       flush();
+      const next = command[index + 1];
       const suffix = command[index + 2];
-      const operator = suffix === "<" ? "<<<" : suffix === "-" ? "<<-" : "<<";
-      tokens.push({ text: operator, quoted: false });
-      if (operator !== "<<<") {
+      const operator =
+        char === "<" && next === "<"
+          ? suffix === "<"
+            ? "<<<"
+            : suffix === "-"
+              ? "<<-"
+              : "<<"
+          : next === char || next === "&"
+            ? char + next
+            : char;
+      tokens.push({ text: descriptor + operator, quoted: false });
+      if (operator === "<<" || operator === "<<-") {
         awaitingHereDocument = { stripTabs: operator === "<<-" };
       }
       index += operator.length - 1;
