@@ -32,7 +32,7 @@ interface ShellToken {
 
 const MAX_PROMPT_LENGTH = 200;
 const MAX_NESTED_COMMAND_DEPTH = 2;
-const COMMAND_SEPARATOR = /^(\|\|?|&&|;|&)$/;
+const COMMAND_SEPARATOR = /^(\|[|&]?|&&|;|&)$/;
 const REDIRECT_PREFIX = /^(?:\d*[<>]|&>)/;
 const REDIRECT_WITH_OPERAND = /^(?:\d*(>>?|<|<<-?|<<<|[<>]&)|&>>?)$/;
 const VALUE_OPTIONS = new Set([
@@ -192,9 +192,10 @@ function tokenizeShell(command: string): ShellToken[] {
     // `&` stays attached inside redirects such as `2>&1`.
     if (char === ";" || char === "|" || (char === "&" && !text.endsWith(">"))) {
       flush();
-      const doubled = char !== ";" && command[index + 1] === char;
-      tokens.push({ text: doubled ? char + char : char, quoted: false });
-      if (doubled) {
+      const next = command[index + 1];
+      const paired = char !== ";" && (next === char || (char === "|" && next === "&"));
+      tokens.push({ text: paired ? char + next : char, quoted: false });
+      if (paired) {
         index += 1;
       }
       continue;

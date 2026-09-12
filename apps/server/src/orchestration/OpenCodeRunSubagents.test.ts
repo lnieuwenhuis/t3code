@@ -208,6 +208,17 @@ describe("parseOpenCodeRunCommand", () => {
     );
   });
 
+  it("recognizes foreground combined-output pipes without accepting background lists", () => {
+    expect(
+      parseOpenCodeRunCommand("opencode run --format json 'review' |& tee run.log")?.jsonOutput,
+    ).toBe(true);
+    expect(parseOpenCodeRunCommand("sh -c 'opencode run real' |& tee run.log")?.prompt).toBe(
+      "real",
+    );
+    expect(parseOpenCodeRunCommand("opencode run real |& tee run.log &")).toBeUndefined();
+    expect(parseOpenCodeRunCommand("sh -c 'opencode run real' |& tee run.log &")).toBeUndefined();
+  });
+
   it("reads the prompt, model, agent, and output format", () => {
     expect(
       parseOpenCodeRunCommand(
