@@ -219,6 +219,29 @@ describe("parseOpenCodeRunCommand", () => {
     expect(parseOpenCodeRunCommand("sh -c 'opencode run real' |& tee run.log &")).toBeUndefined();
   });
 
+  it.each(["--model", "--title"])(
+    "does not consume shell separators as values for %s",
+    (option) => {
+      for (const separator of [";", "|", "||", "&&", "\n"]) {
+        expect(
+          parseOpenCodeRunCommand(`opencode run ${option}${separator} echo next`)?.prompt,
+        ).toBeUndefined();
+      }
+      expect(parseOpenCodeRunCommand(`opencode run ${option} ';' real`)?.prompt).toBe("real");
+    },
+  );
+
+  it("keeps global option parsing inside its command and skips redirects between values", () => {
+    expect(parseOpenCodeRunCommand("opencode --log-level; run fake")).toBeUndefined();
+    expect(parseOpenCodeRunCommand("opencode run --model >out zen/model prompt")).toMatchObject({
+      model: "zen/model",
+      prompt: "prompt",
+    });
+    expect(
+      parseOpenCodeRunCommand("sh -c 'opencode run --model; echo next'")?.prompt,
+    ).toBeUndefined();
+  });
+
   it("reads the prompt, model, agent, and output format", () => {
     expect(
       parseOpenCodeRunCommand(

@@ -210,6 +210,27 @@ function tokenizeShell(command: string): ShellToken[] {
   return tokens;
 }
 
+/** Redirections belong to the shell, not the executable's option arguments. */
+function withoutShellRedirects(tokens: ReadonlyArray<ShellToken>): ShellToken[] {
+  const words: ShellToken[] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!;
+    if (!token.quoted && REDIRECT_PREFIX.test(token.text)) {
+      const next = tokens[index + 1];
+      if (
+        REDIRECT_WITH_OPERAND.test(token.text) &&
+        next &&
+        (next.quoted || !COMMAND_SEPARATOR.test(next.text))
+      ) {
+        index += 1;
+      }
+    } else {
+      words.push(token);
+    }
+  }
+  return words;
+}
+
 /** Executable basename after shell quote removal. */
 function executableName(token: ShellToken): string | undefined {
   const slash = token.text.lastIndexOf("/");
@@ -310,12 +331,6 @@ function parseInvocationTokens(
       if (COMMAND_SEPARATOR.test(token.text)) {
         break;
       }
-      if (REDIRECT_PREFIX.test(token.text)) {
-        if (REDIRECT_WITH_OPERAND.test(token.text)) {
-          index += 1;
-        }
-        continue;
-      }
     }
     if (optionsEnded || !token.text.startsWith("-")) {
       positionals.push(token.text);
@@ -332,6 +347,9 @@ function parseInvocationTokens(
       continue;
     }
     const next = tokens[index + 1];
+    if (next && !next.quoted && COMMAND_SEPARATOR.test(next.text)) {
+      break;
+    }
     if (VALUE_OPTIONS.has(name)) {
       if (next !== undefined) {
         options.set(name, next.text);
@@ -362,10 +380,21 @@ function subcommandIndex(tokens: ReadonlyArray<ShellToken>, start: number): numb
   let cursor = start;
   while (cursor < tokens.length) {
     const token = tokens[cursor]!;
+    if (!token.quoted && COMMAND_SEPARATOR.test(token.text)) {
+      return undefined;
+    }
     if (!token.text.startsWith("-")) {
       return cursor;
     }
-    cursor += GLOBAL_VALUE_OPTIONS.has(token.text) ? 2 : 1;
+    if (GLOBAL_VALUE_OPTIONS.has(token.text)) {
+      const value = tokens[cursor + 1];
+      if (!value || (!value.quoted && COMMAND_SEPARATOR.test(value.text))) {
+        return undefined;
+      }
+      cursor += 2;
+    } else {
+      cursor += 1;
+    }
   }
   return undefined;
 }
@@ -382,7 +411,7 @@ export function parseOpenCodeRunCommand(
   if (!command.includes("opencode")) {
     return undefined;
   }
-  const tokens = tokenizeShell(command);
+  const tokens = withoutShellRedirects(tokenizeShell(command));
   for (let index = 0; index + 1 < tokens.length; index += 1) {
     if (executableName(tokens[index]!) !== "opencode" || !startsSimpleCommand(tokens, index)) {
       continue;
