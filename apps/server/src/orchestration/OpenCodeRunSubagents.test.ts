@@ -489,6 +489,31 @@ describe("deriveOpenCodeRunEvents", () => {
     });
   });
 
+  it.each(["stdout", "output"])(
+    "reads rawOutput.%s when item metadata has no aggregated output",
+    (outputKey) => {
+      const events = deriveOpenCodeRunEvents(
+        {
+          ...base,
+          type: "item.completed",
+          eventId: EventId.make("evt-raw-output"),
+          payload: {
+            itemType: "command_execution",
+            status: "completed",
+            data: { item: { command, exitCode: 0 }, rawOutput: { [outputKey]: runJsonOutput } },
+          },
+        },
+        { started: true },
+      );
+      expect(events).toHaveLength(5);
+      expect(events[0]?.payload).toMatchObject({ taskId: "opencode-run:tool-1:ses_child_1" });
+      expect(events[4]?.payload).toMatchObject({
+        summary: "Both tasks finished: 391 and a failure.",
+        typedUsage: { totalTokens: 160 },
+      });
+    },
+  );
+
   it("reads Codex and ACP shaped command items", () => {
     const codex = deriveOpenCodeRunEvents(
       {

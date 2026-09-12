@@ -474,8 +474,9 @@ function outputFromItemData(data: Record<string, unknown> | undefined): string |
     return textFromContent(resultRecord.content);
   }
   const item = asRecord(data.item);
-  if (item) {
-    return asString(item.aggregatedOutput);
+  const aggregatedOutput = asString(item?.aggregatedOutput);
+  if (aggregatedOutput !== undefined) {
+    return aggregatedOutput;
   }
   const rawOutput = data.rawOutput;
   if (typeof rawOutput === "string") {
