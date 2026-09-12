@@ -86,7 +86,10 @@ const expectHeader = (response: Response, name: string, expected: string, what: 
 
 const env = Object.fromEntries(
   Object.entries(process.env).filter(
-    ([key]) => key !== "VITE_DEV_SERVER_URL" && !key.startsWith("T3CODE_"),
+    ([key]) =>
+      key !== "VITE_DEV_SERVER_URL" &&
+      key !== "T3_SERVICE_LAUNCHER_CONTEXT" &&
+      !key.startsWith("T3CODE_"),
   ),
 );
 const port = await freePort();

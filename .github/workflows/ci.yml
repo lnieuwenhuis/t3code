@@ -75,6 +75,9 @@ jobs:
 
       - name: Smoke the built server under Bun
         timeout-minutes: 2
+        env:
+          # The standalone child must discard inherited launcher state.
+          T3_SERVICE_LAUNCHER_CONTEXT: '{"protocol":2,"childVersion":"0.0.0"}'
         run: node scripts/server-runtime-smoke.ts
 
   # Everything except `t3` (apps/server). `--parallel` drops the package
