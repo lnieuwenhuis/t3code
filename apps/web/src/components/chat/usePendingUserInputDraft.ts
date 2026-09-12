@@ -185,6 +185,37 @@ export function usePendingUserInputDraft({
     rescuePendingUserInputAnswers,
     setPendingUserInputAnswersByRequestId,
   ]);
+  // Persist the full current answer set after edits. A failed submission can
+  // contain several answers, so clearing one must retain the others even if
+  // this thread is hidden before the request disappears.
+  useLayoutEffect(() => {
+    const carried = carriedComposerDraftByRequestIdRef.current.get(activePendingRequestKey);
+    const answers = pendingUserInputAnswersByRequestId[activePendingRequestKey];
+    if (!activePendingUserInput || !carried || !answers) {
+      return;
+    }
+    const draftPrompt =
+      useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.prompt ?? "";
+    const unrelatedText = draftPrompt === carried.text ? carried.unrelatedText : draftPrompt;
+    const text =
+      mergeComposerDraftPromptWithPendingAnswer(
+        unrelatedText,
+        collectPendingUserInputCustomAnswers(answers) ?? "",
+      ) ?? unrelatedText;
+    carriedComposerDraftByRequestIdRef.current.set(activePendingRequestKey, {
+      text,
+      unrelatedText,
+    });
+    if (text !== draftPrompt) {
+      setComposerDraftPrompt(composerDraftTarget, text);
+    }
+  }, [
+    activePendingRequestKey,
+    activePendingUserInput,
+    composerDraftTarget,
+    pendingUserInputAnswersByRequestId,
+    setComposerDraftPrompt,
+  ]);
   const beginSubmission = useCallback(
     (requestId: string) => {
       // Marked before the round trip: the resolved activity can arrive over the

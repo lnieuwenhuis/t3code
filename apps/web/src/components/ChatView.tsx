@@ -7389,16 +7389,6 @@ export default function ChatView(props: ChatViewProps) {
       if (!question || question.allowCustomAnswer === false) {
         return;
       }
-      // An explicit erase also discards the persisted copy of the carried
-      // first answer, so Stop cannot resurrect text the user removed.
-      if (questionId === activePendingUserInput.questions[0]?.id && value.trim().length === 0) {
-        returnTextToComposerDraft(
-          activePendingUserInput.requestId,
-          value,
-          composerDraftTarget,
-          true,
-        );
-      }
       promptRef.current = value;
       setPendingUserInputAnswersByRequestId((existing) => ({
         ...existing,
@@ -7419,13 +7409,7 @@ export default function ChatView(props: ChatViewProps) {
         composerRef.current?.focusAt(nextCursor);
       }
     },
-    [
-      activePendingUserInput,
-      activePendingRequestKey,
-      composerRef,
-      composerDraftTarget,
-      returnTextToComposerDraft,
-    ],
+    [activePendingUserInput, activePendingRequestKey, composerRef],
   );
 
   const onAdvanceActivePendingUserInput = useCallback(() => {

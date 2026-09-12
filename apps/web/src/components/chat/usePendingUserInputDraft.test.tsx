@@ -15,13 +15,13 @@ const environmentId = EnvironmentId.make("environment-a");
 const otherEnvironmentId = EnvironmentId.make("environment-b");
 const threadA = ThreadId.make("thread-a");
 const threadB = ThreadId.make("thread-b");
-const request = { requestId: "request", questions: [{ id: "question" }] };
+const request = { requestId: "request", questions: [{ id: "question" }, { id: "question-two" }] };
 const ownerA = scopeThreadRef(environmentId, threadA);
 let renderer: ReactTestRenderer;
 let composer: {
   target: ScopedThreadRef;
   answer: string;
-  edit: (value: string) => void;
+  edit: (value: string, questionId?: string) => void;
   submit: (response: Promise<void>) => Promise<void>;
 };
 
@@ -51,13 +51,12 @@ function Composer({
     composer = {
       target,
       answer: answers[key]?.question?.customAnswer ?? "",
-      edit(value) {
-        if (value.trim().length === 0)
-          lifecycle.returnTextToComposerDraft(request.requestId, value, target, true);
+      edit(value, questionId = "question") {
         setAnswers((existing) => ({
           ...existing,
           [key]: {
-            question: setPendingUserInputCustomAnswer(existing[key]?.question, value),
+            ...existing[key],
+            [questionId]: setPendingUserInputCustomAnswer(existing[key]?.[questionId], value),
           },
         }));
       },
@@ -191,6 +190,20 @@ describe("pending answer draft ownership through mounted navigation", () => {
       expect(prompt()).toBe(
         nextAction === "edit" ? "unrelated draft\n\nnew answer" : "unrelated draft",
       );
+    },
+  );
+
+  it.each(["question", "question-two"])(
+    "preserves the other failed answer after erasing %s and an offscreen cancellation",
+    async (questionId) => {
+      await act(() => composer.edit("answer one"));
+      await act(() => composer.edit("answer two", "question-two"));
+      await act(() => composer.submit(Promise.reject(new Error("response failed"))));
+      expect(prompt()).toBe("answer one\n\nanswer two");
+      await act(() => composer.edit("", questionId));
+      await navigate(threadB, false);
+      await navigate(threadA, false);
+      expect(prompt()).toBe(questionId === "question" ? "answer two" : "answer one");
     },
   );
 
