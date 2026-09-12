@@ -8,6 +8,7 @@ import {
 import {
   collectPendingUserInputCustomAnswers,
   type PendingUserInputRequestSnapshot,
+  mergeComposerDraftPromptWithPendingAnswer,
   resolveComposerDraftPromptAfterReturningPendingAnswer,
   resolveComposerDraftToCarryIntoPendingUserInput,
   shouldRescueCancelledPendingUserInput,
@@ -31,7 +32,6 @@ export function usePendingUserInputDraft({
   pendingUserInputAnswersByRequestId: AnswersByRequest;
   setPendingUserInputAnswersByRequestId: Dispatch<SetStateAction<AnswersByRequest>>;
 }) {
-  const composerDraftTargetRef = useRef(composerDraftTarget);
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
   const activePendingRequestKey = pendingUserInputRequestKey(
     composerDraftTarget,
@@ -47,12 +47,11 @@ export function usePendingUserInputDraft({
   // being sent, not the question being cancelled, so the effect below must
   // not rescue its text. Unmarked when the submit fails.
   const submittedPendingUserInputRequestIdsRef = useRef<Set<string>>(new Set());
-  // Draft text carried into a request's first question when the question
-  // appeared. Answer state is in-memory, so the draft store keeps that text
-  // as the persisted copy until the answer is sent; the copy counts as blank
-  // when text returns to the draft so it is never merged with itself.
+  // Persisted answer copies, initially carried from the composer and refreshed
+  // on submission failure. Retain the unrelated draft separately so replacing
+  // or removing the answer copy never consumes that draft.
   const carriedComposerDraftByRequestIdRef = useRef(
-    new Map<string, { draftTarget: ScopedThreadRef | DraftId; text: string }>(),
+    new Map<string, { text: string; unrelatedText: string }>(),
   );
   // Text typed in the composer is never dropped: it is sent, or it stays in
   // the draft. Appends text that is leaving a request's answer slot unsent to
@@ -73,6 +72,7 @@ export function usePendingUserInputDraft({
       const nextDraftPrompt = resolveComposerDraftPromptAfterReturningPendingAnswer({
         draftPrompt,
         carriedDraftPrompt: carried?.text ?? null,
+        unrelatedDraftPrompt: carried?.unrelatedText ?? "",
         pendingCustomAnswer: text,
         discardEmptyCarriedDraft,
       });
@@ -115,7 +115,6 @@ export function usePendingUserInputDraft({
   // written only here, so "previous" is always the state before this
   // transition.
   useLayoutEffect(() => {
-    composerDraftTargetRef.current = composerDraftTarget;
     const nextRequestId = activePendingUserInput?.requestId ?? null;
     const previous = prevPendingUserInputRef.current;
     // A thread switch only hides the question, so it neither rescues nor
@@ -158,8 +157,8 @@ export function usePendingUserInputDraft({
       });
       if (draftToCarry !== null) {
         carriedComposerDraftByRequestIdRef.current.set(activePendingRequestKey, {
-          draftTarget: composerDraftTarget,
           text: draftToCarry,
+          unrelatedText: "",
         });
         setPendingUserInputAnswersByRequestId((existing) => ({
           ...existing,
@@ -198,43 +197,41 @@ export function usePendingUserInputDraft({
       // from the draft goes now, before the resolve can bring the draft back
       // on screen.
       const carried = carriedComposerDraftByRequestIdRef.current.get(requestKey);
-      if (carried) {
-        carriedComposerDraftByRequestIdRef.current.delete(requestKey);
-        const draftPrompt =
-          useComposerDraftStore.getState().getComposerDraft(carried.draftTarget)?.prompt ?? "";
-        if (draftPrompt === carried.text) {
-          setComposerDraftPrompt(carried.draftTarget, "");
-        }
+      carriedComposerDraftByRequestIdRef.current.delete(requestKey);
+      const draftPrompt =
+        useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.prompt ?? "";
+      if (carried && draftPrompt === carried.text) {
+        setComposerDraftPrompt(composerDraftTarget, carried.unrelatedText);
       }
-      // Captures the submitting owner and answer snapshot across navigation.
+      // Capture what was submitted, rather than the original composer carry.
+      // Failure may arrive while a different thread or environment is visible.
+      const submittedText = collectPendingUserInputCustomAnswers(
+        pendingUserInputAnswersByRequestId[requestKey],
+      );
       return () => {
         submittedPendingUserInputRequestIdsRef.current.delete(requestKey);
-        // The answer was not sent after all, so the persisted copy of the
-        // carried draft comes back (unless something else filled the draft
-        // meanwhile) and the rescue below treats it as blank as usual. This
-        // does not depend on which thread is on screen, so a reload or an
-        // off-screen cancel after a failed submit still finds the draft.
-        if (
-          carried &&
-          (useComposerDraftStore.getState().getComposerDraft(carried.draftTarget)?.prompt ?? "")
-            .length === 0
-        ) {
-          carriedComposerDraftByRequestIdRef.current.set(requestKey, carried);
-          setComposerDraftPrompt(carried.draftTarget, carried.text);
+        if (submittedText === null) {
+          return;
         }
-        // Stop can remove the question while the answer is in flight. The
-        // transition effect skipped it as submitted, so rescue here when the
-        // question is gone and this thread is still on screen.
-        if (
-          prevPendingUserInputRef.current?.requestId !== requestId &&
-          pendingUserInputRequestKey(composerDraftTargetRef.current, null) ===
-            pendingUserInputRequestKey(composerDraftTarget, null)
-        ) {
-          rescuePendingUserInputAnswers(requestId, composerDraftTarget);
+        const unrelatedText =
+          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.prompt ?? "";
+        const restoredText = mergeComposerDraftPromptWithPendingAnswer(
+          unrelatedText,
+          submittedText,
+        );
+        if (restoredText === null) {
+          return;
         }
+        // Keep the unrelated draft separate so editing, erasing or retrying the
+        // answer replaces only its persisted copy, even after navigation.
+        carriedComposerDraftByRequestIdRef.current.set(requestKey, {
+          text: restoredText,
+          unrelatedText,
+        });
+        setComposerDraftPrompt(composerDraftTarget, restoredText);
       };
     },
-    [composerDraftTarget, rescuePendingUserInputAnswers, setComposerDraftPrompt],
+    [composerDraftTarget, pendingUserInputAnswersByRequestId, setComposerDraftPrompt],
   );
   return { returnTextToComposerDraft, beginSubmission };
 }

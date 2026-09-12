@@ -120,7 +120,7 @@ describe("pending answer draft ownership through mounted navigation", () => {
     const response = new Promise<void>((_resolve, reject) => {
       rejectResponse = reject;
     });
-    let submission: Promise<void>;
+    let submission!: Promise<void>;
     await act(() => {
       submission = composer.submit(response);
     });
@@ -139,7 +139,7 @@ describe("pending answer draft ownership through mounted navigation", () => {
     const response = new Promise<void>((_resolve, reject) => {
       rejectResponse = reject;
     });
-    let submission: Promise<void>;
+    let submission!: Promise<void>;
     await act(() => {
       submission = composer.submit(response);
     });
@@ -151,18 +151,55 @@ describe("pending answer draft ownership through mounted navigation", () => {
       await submission;
     });
     expect(prompt(otherOwner)).toBe("other draft");
-    expect(prompt()).toBe("original draft");
+    expect(prompt()).toBe("edited answer");
     await navigate(threadA, true);
     await navigate(threadA, false);
     expect(prompt()).toBe("edited answer");
   });
+
+  it.each(["disappear", "edit", "erase", "retry"])(
+    "persists an offscreen failed answer and preserves unrelated text on %s",
+    async (nextAction) => {
+      await act(() => composer.edit("edited answer"));
+      let rejectResponse!: (error: Error) => void;
+      const response = new Promise<void>((_resolve, reject) => {
+        rejectResponse = reject;
+      });
+      let submission!: Promise<void>;
+      await act(() => {
+        submission = composer.submit(response);
+      });
+      await navigate(threadB, false);
+      useComposerDraftStore.getState().setPrompt(ownerA, "unrelated draft");
+      await act(async () => {
+        rejectResponse(new Error("response failed"));
+        await submission;
+      });
+      expect(prompt()).toBe("unrelated draft\n\nedited answer");
+      if (nextAction === "disappear") {
+        await navigate(threadA, false);
+        expect(prompt()).toBe("unrelated draft\n\nedited answer");
+        return;
+      }
+      await navigate(threadA, true);
+      if (nextAction === "retry") {
+        await act(() => composer.submit(Promise.resolve()));
+      } else {
+        await act(() => composer.edit(nextAction === "erase" ? "" : "new answer"));
+      }
+      await navigate(threadA, false);
+      expect(prompt()).toBe(
+        nextAction === "edit" ? "unrelated draft\n\nnew answer" : "unrelated draft",
+      );
+    },
+  );
 
   it("does not rescue a submitted answer when returning before its resolution", async () => {
     let resolveResponse!: () => void;
     const response = new Promise<void>((resolve) => {
       resolveResponse = resolve;
     });
-    let submission: Promise<void>;
+    let submission!: Promise<void>;
     await act(() => {
       submission = composer.submit(response);
     });

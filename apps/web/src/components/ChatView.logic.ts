@@ -496,6 +496,7 @@ export function resolveComposerDraftPromptAfterReturningPendingAnswer(input: {
   carriedDraftPrompt: string | null;
   pendingCustomAnswer: string;
   discardEmptyCarriedDraft?: boolean;
+  unrelatedDraftPrompt?: string;
 }): string | null {
   if (
     input.discardEmptyCarriedDraft &&
@@ -503,11 +504,11 @@ export function resolveComposerDraftPromptAfterReturningPendingAnswer(input: {
     input.carriedDraftPrompt !== null &&
     input.draftPrompt === input.carriedDraftPrompt
   ) {
-    return "";
+    return input.unrelatedDraftPrompt ?? "";
   }
   const existingDraftPrompt =
     input.carriedDraftPrompt !== null && input.draftPrompt === input.carriedDraftPrompt
-      ? ""
+      ? (input.unrelatedDraftPrompt ?? "")
       : input.draftPrompt;
   return mergeComposerDraftPromptWithPendingAnswer(existingDraftPrompt, input.pendingCustomAnswer);
 }
