@@ -196,6 +196,17 @@ describe("parseOpenCodeRunCommand", () => {
     expect(parseOpenCodeRunCommand("opencode run real 2>&1 &")).toBeUndefined();
   });
 
+  it("ignores asynchronously executed direct command lists", () => {
+    expect(parseOpenCodeRunCommand("opencode run test | cat &")).toBeUndefined();
+    expect(parseOpenCodeRunCommand("opencode run test && echo done &")).toBeUndefined();
+    expect(parseOpenCodeRunCommand("opencode run test || echo failed &")).toBeUndefined();
+    expect(parseOpenCodeRunCommand("opencode run real; echo other &")?.prompt).toBe("real");
+    expect(parseOpenCodeRunCommand("opencode run real\necho other &")?.prompt).toBe("real");
+    expect(parseOpenCodeRunCommand("opencode run ignored | cat & opencode run real")?.prompt).toBe(
+      "real",
+    );
+  });
+
   it("reads the prompt, model, agent, and output format", () => {
     expect(
       parseOpenCodeRunCommand(

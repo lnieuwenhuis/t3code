@@ -260,9 +260,9 @@ function isShellWrapperScript(tokens: ReadonlyArray<ShellToken>, index: number):
   );
 }
 
-/** An asynchronous outer shell list cannot mirror a nested run's lifetime. */
-function isBackgroundShellWrapper(tokens: ReadonlyArray<ShellToken>, index: number): boolean {
-  for (let cursor = index + 1; cursor < tokens.length; cursor += 1) {
+/** An asynchronous shell list cannot mirror the delegated run's lifetime. */
+function isBackgroundShellList(tokens: ReadonlyArray<ShellToken>, start = 0): boolean {
+  for (let cursor = start; cursor < tokens.length; cursor += 1) {
     const token = tokens[cursor]!;
     if (!token.quoted && token.text === "&") {
       return true;
@@ -294,6 +294,9 @@ function normalizePrompt(parts: ReadonlyArray<string>): string | undefined {
 function parseInvocationTokens(
   tokens: ReadonlyArray<ShellToken>,
 ): OpenCodeRunInvocation | undefined {
+  if (isBackgroundShellList(tokens)) {
+    return undefined;
+  }
   const positionals: string[] = [];
   const options = new Map<string, string>();
   let optionsEnded = false;
@@ -396,7 +399,7 @@ export function parseOpenCodeRunCommand(
     return undefined;
   }
   for (let index = 2; index < tokens.length; index += 1) {
-    if (isShellWrapperScript(tokens, index) && !isBackgroundShellWrapper(tokens, index)) {
+    if (isShellWrapperScript(tokens, index) && !isBackgroundShellList(tokens, index + 1)) {
       const nested = parseOpenCodeRunCommand(tokens[index]!.text, depth + 1);
       if (nested) {
         return nested;
