@@ -40,6 +40,8 @@ import { ProjectionThreadMessageRepository } from "../../persistence/Services/Pr
 import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
 import { ProjectionThreadProposedPlanRepository } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
 import { ProjectionThreadProposedPlanRepositoryLive } from "../../persistence/Layers/ProjectionThreadProposedPlans.ts";
+import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
+import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ThreadBackgroundLivenessService } from "../ThreadBackgroundLiveness.ts";
 import { ThreadPlanProgressService } from "../ThreadPlanProgress.ts";
@@ -909,6 +911,7 @@ const make = Effect.gen(function* () {
   const projectionThreadProposedPlans = yield* ProjectionThreadProposedPlanRepository;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
+  const commandReceipts = yield* OrchestrationCommandReceiptRepository;
   const serverSettingsService = yield* ServerSettingsService;
   const checkpointStore = yield* CheckpointStore.CheckpointStore;
   const providerCommandId = (event: ProviderRuntimeEvent, tag: string) =>
@@ -1485,6 +1488,18 @@ const make = Effect.gen(function* () {
 
   const processRuntimeEvent = (event: ProviderRuntimeEvent, deduplicateActivity = false) =>
     Effect.gen(function* () {
+      // Accepted synthetic activities already applied their lifecycle effects.
+      // Check before liveness too: the bounded item cache may have expired, and
+      // replaying an old start must not revive a run that has since completed.
+      if (deduplicateActivity) {
+        const receipt = yield* commandReceipts.getByCommandId({
+          commandId: CommandId.make(`provider:${event.eventId}:thread-activity-append`),
+        });
+        if (Option.isSome(receipt) && receipt.value.status === "accepted") {
+          return;
+        }
+      }
+
       if (event.type === "content.delta" && event.payload.streamKind !== "assistant_text") {
         return;
       }
@@ -2238,6 +2253,7 @@ export const ProviderRuntimeIngestionLive = Layer.effect(
   make,
 ).pipe(
   Layer.provide(ProjectionThreadActivityRepositoryLive),
+  Layer.provide(OrchestrationCommandReceiptRepositoryLive),
   Layer.provide(ProjectionThreadMessageRepositoryLive),
   Layer.provide(ProjectionThreadProposedPlanRepositoryLive),
   Layer.provide(ProjectionTurnRepositoryLive),

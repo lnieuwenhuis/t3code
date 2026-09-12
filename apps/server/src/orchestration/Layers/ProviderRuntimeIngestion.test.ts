@@ -264,6 +264,7 @@ describe("ProviderRuntimeIngestion", () => {
     serverSettings?: Partial<ServerSettings>;
     threadTitle?: string;
     workspaceSubdirectory?: string;
+    clock?: Clock.Clock;
   }) {
     const repositoryRoot = makeTempDir("t3-provider-project-");
     NodeChildProcess.execFileSync("git", ["init", "--initial-branch=main"], {
@@ -313,7 +314,9 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(Layer.succeed(Tracer.Tracer, sqlCounter.tracer)),
     );
-    const testRuntime = ManagedRuntime.make(layer);
+    const testRuntime = ManagedRuntime.make(
+      options?.clock ? layer.pipe(Layer.provide(Layer.succeed(Clock.Clock, options.clock))) : layer,
+    );
     runtime = testRuntime;
     const engine = await testRuntime.runPromise(Effect.service(OrchestrationEngineService));
     const snapshotQuery = await testRuntime.runPromise(Effect.service(ProjectionSnapshotQuery));
@@ -1526,6 +1529,51 @@ describe("ProviderRuntimeIngestion", () => {
 
     expect(activity?.summary).toBe("Ran command");
     expect(payload?.detail).toBe("bun run lint");
+  });
+
+  it("does not revive a completed delegated run after cache expiry and stale start replay", async () => {
+    const liveClock = Effect.runSync(Clock.clockWith(Effect.succeed));
+    let clockMillis = liveClock.currentTimeMillisUnsafe();
+    const harness = await createHarness({
+      clock: {
+        currentTimeNanosUnsafe: () => liveClock.currentTimeNanosUnsafe(),
+        currentTimeNanos: liveClock.currentTimeNanos,
+        monotonicTimeNanosUnsafe: () => liveClock.monotonicTimeNanosUnsafe(),
+        monotonicTimeNanos: liveClock.monotonicTimeNanos,
+        sleep: (duration) => liveClock.sleep(duration),
+        currentTimeMillisUnsafe: () => clockMillis,
+        currentTimeMillis: Effect.sync(() => clockMillis),
+      },
+    });
+    const item = {
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-expired-run"),
+      itemId: asItemId("item-expired-run"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      payload: {
+        itemType: "command_execution",
+        data: { command: "opencode run real" },
+      },
+    };
+    await harness.emitAndDrain([
+      { ...item, type: "item.started", eventId: asEventId("run-start") },
+    ]);
+    expect((await harness.readThreadShell()).backgroundLiveness).toBe("working");
+    await harness.emitAndDrain([
+      { ...item, type: "item.completed", eventId: asEventId("run-end") },
+    ]);
+    expect((await harness.readThreadShell()).backgroundLiveness).not.toBe("working");
+    clockMillis += 121 * 60 * 1000;
+    await harness.emitAndDrain([
+      { ...item, type: "item.started", eventId: asEventId("stale-run-start") },
+      { ...item, type: "item.updated", eventId: asEventId("stale-run-update") },
+    ]);
+    expect((await harness.readThreadShell()).backgroundLiveness).not.toBe("working");
+    const snapshot = await harness.readModel();
+    expect(
+      snapshot.threads[0]?.activities.filter((activity) => activity.kind.startsWith("task.")),
+    ).toHaveLength(2);
   });
 
   it("surfaces an opencode run made through a shell tool as a delegated agent", async () => {
