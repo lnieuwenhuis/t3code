@@ -1,6 +1,6 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, PullRequestDetail, PullRequestRef } from "@t3tools/contracts";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLiveRefresh } from "~/hooks/useLiveRefresh";
 import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -79,11 +79,26 @@ export function usePullRequestRefresh({
   useLiveRefresh(() => void refreshDetailFromHost(), {
     key: `pull-request:${scopeKey}`,
   });
-  const [isInvalidating, setIsInvalidating] = useState(false);
+  const refreshScope = useMemo(() => ({ key: scopeKey }), [scopeKey]);
+  const activeRefreshScope = useRef<typeof refreshScope | null>(null);
+  const refreshGeneration = useRef(0);
+  const [pendingScope, setPendingScope] = useState<typeof refreshScope | null>(null);
+  useEffect(() => {
+    activeRefreshScope.current = refreshScope;
+    return () => {
+      activeRefreshScope.current = null;
+      refreshGeneration.current += 1;
+    };
+  }, [refreshScope]);
+  const isInvalidating = pendingScope === refreshScope;
+
   const refreshFromHost = useCallback(async () => {
-    setIsInvalidating(true);
+    const generation = ++refreshGeneration.current;
+    setPendingScope(refreshScope);
     try {
       const result = await invalidate({ environmentId, input: { reference } });
+      if (activeRefreshScope.current !== refreshScope || generation !== refreshGeneration.current)
+        return;
       if (result._tag === "Failure") {
         toastManager.add({
           type: "error",
@@ -95,9 +110,10 @@ export function usePullRequestRefresh({
       refreshDetail();
       setRefreshToken((token) => token + 1);
     } finally {
-      setIsInvalidating(false);
+      if (activeRefreshScope.current === refreshScope && generation === refreshGeneration.current)
+        setPendingScope(null);
     }
-  }, [environmentId, invalidate, reference, refreshDetail]);
+  }, [environmentId, invalidate, reference, refreshDetail, refreshScope]);
   // A refresh asked for by the page: the detail, and through the token below, the diff with it.
   const appliedForcedToken = useRef(forcedRefreshToken);
   useEffect(() => {

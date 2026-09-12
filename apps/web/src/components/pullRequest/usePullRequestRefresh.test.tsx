@@ -232,6 +232,50 @@ describe("mounted pull request refresh sequencing", () => {
     expect(renderer!.root.findByType("button").props.disabled).toBe(false);
   });
 
+  it.each(["success", "failure"])(
+    "ignores an older manual %s while a forced refresh is pending",
+    async (outcome) => {
+      await render();
+      const older = invalidation();
+      await act(async () => {
+        void renderer!.root.findByType("button").props.onClick();
+      });
+      const newer = invalidation();
+      await render({ forcedRefreshToken: 1 });
+      await (outcome === "success" ? older.succeed() : older.fail());
+      expect(renderer!.root.findByType("button").props.disabled).toBe(true);
+      expect(refreshDetail).not.toHaveBeenCalled();
+      expect(notify).not.toHaveBeenCalled();
+      expect(diffRefreshes()).toBe("0");
+      await newer.succeed();
+      expect(renderer!.root.findByType("button").props.disabled).toBe(false);
+      expect(refreshDetail).toHaveBeenCalledOnce();
+      expect(diffRefreshes()).toBe("1");
+    },
+  );
+
+  it.each(["scope", "unmount"])("ignores a manual refresh after %s changes", async (change) => {
+    await render();
+    const pending = invalidation();
+    await act(async () => {
+      void renderer!.root.findByType("button").props.onClick();
+    });
+    if (change === "scope") {
+      await render({
+        scopeKey: `${props.scopeKey}:other`,
+        reference: { ...props.reference, number: 8 },
+      });
+      expect(renderer!.root.findByType("button").props.disabled).toBe(false);
+    } else {
+      await act(async () => renderer!.unmount());
+      renderer = null;
+    }
+    await pending.succeed();
+    expect(refreshDetail).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+    if (renderer) expect(diffRefreshes()).toBe("0");
+  });
+
   it("awaits full invalidation before a page refresh", async () => {
     await render();
     const pending = invalidation();
