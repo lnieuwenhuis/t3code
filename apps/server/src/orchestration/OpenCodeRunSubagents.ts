@@ -120,6 +120,13 @@ function tokenizeShell(command: string): ShellToken[] {
       }
       continue;
     }
+    // A hash begins a comment only outside quotes and at a word boundary.
+    // Leave the newline for normal command/heredoc processing.
+    if (char === "#" && !inToken) {
+      const newline = command.indexOf("\n", index);
+      index = newline === -1 ? command.length : newline - 1;
+      continue;
+    }
     if (char === "\n") {
       flush();
       tokens.push({ text: ";", quoted: false });

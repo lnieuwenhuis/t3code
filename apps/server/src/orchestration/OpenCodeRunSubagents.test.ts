@@ -165,6 +165,20 @@ describe("parseOpenCodeRunCommand", () => {
     ).toBe("second");
   });
 
+  it("ignores shell syntax in comments while retaining literal hashes", () => {
+    expect(parseOpenCodeRunCommand("# Example input uses <<EOF\nopencode run real")?.prompt).toBe(
+      "real",
+    );
+    expect(parseOpenCodeRunCommand("sh -c 'opencode run real' # retry & if needed")?.prompt).toBe(
+      "real",
+    );
+    expect(parseOpenCodeRunCommand("# opencode run fake")).toBeUndefined();
+    expect(parseOpenCodeRunCommand("opencode run real # <<EOF &")?.prompt).toBe("real");
+    expect(parseOpenCodeRunCommand("opencode run '# quoted' \\#escaped word#suffix")?.prompt).toBe(
+      "# quoted #escaped word#suffix",
+    );
+  });
+
   it("reads the prompt, model, agent, and output format", () => {
     expect(
       parseOpenCodeRunCommand(
