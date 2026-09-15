@@ -5,8 +5,8 @@ useDefault = true
 [[rules]]
 id = "generic-api-key"
 [[rules.allowlists]]
-description = "T3 queued-message keyboard shortcut"
+description = "T3 keyboard shortcuts"
 condition = "AND"
 paths = ['''(^|/)packages/shared/src/keybindings\.ts$''']
 regexTarget = "secret"
-regexes = ['''^mod\+shift\+enter$''']
+regexes = ['''^mod\+shift\+(enter|arrowup|arrowdown)$''']
