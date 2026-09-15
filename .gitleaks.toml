@@ -1,0 +1,12 @@
+[extend]
+useDefault = true
+
+# This keyboard shortcut is not an API credential. Keep all other checks enabled.
+[[rules]]
+id = "generic-api-key"
+[[rules.allowlists]]
+description = "T3 queued-message keyboard shortcut"
+condition = "AND"
+paths = ['''(^|/)packages/shared/src/keybindings\.ts$''']
+regexTarget = "secret"
+regexes = ['''^mod\+shift\+enter$''']
