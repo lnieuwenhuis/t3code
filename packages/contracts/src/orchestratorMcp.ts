@@ -184,7 +184,7 @@ export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
   }),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId).annotate({
     description:
-      "Choose an ID before dispatch and reuse it when retrying this delegation after a transport error within the same provider session to recover the same child. After a session change, reconcile children with t3_thread_list first.",
+      "Choose an ID before dispatch and reuse it when retrying this delegation after a transport error while the parent is active in the same provider session to recover the same child. If rejected, settled, or the session changed, reconcile children with t3_thread_list first.",
   }),
   runtimeMode: Schema.optional(OrchestratorMcpRuntimeMode),
   interactionMode: Schema.optional(OrchestratorMcpInteractionMode),

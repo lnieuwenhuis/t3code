@@ -11,6 +11,7 @@ import {
   type OrchestrationV2ThreadProjection,
   type ServerProvider,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -18,6 +19,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 
+import { OrchestratorProjectionError } from "../orchestration-v2/Orchestrator.ts";
 import type { ProviderAdapterV2Shape } from "../orchestration-v2/ProviderAdapter.ts";
 import {
   ProviderAdapterRegistryLookupError,
@@ -438,6 +440,7 @@ describe("OrchestratorMcpService provider resolution", () => {
   const waitFixture = Effect.fn(function* (options?: {
     blockDispatch?: boolean;
     terminal?: boolean;
+    readFailure?: "error" | "defect";
   }) {
     const waiting = yield* Deferred.make<void>();
     const dispatchStarted = yield* Deferred.make<void>();
@@ -477,6 +480,12 @@ describe("OrchestratorMcpService provider resolution", () => {
           }),
         getThreadProjection: (id) => {
           if (id === parentThreadId) return Effect.succeed(parentProjection([task]));
+          if (options?.readFailure === "error") {
+            return Effect.fail(
+              new OrchestratorProjectionError({ threadId: id, cause: "read unavailable" }),
+            );
+          }
+          if (options?.readFailure === "defect") return Effect.die("read defect");
           return Deferred.succeed(waiting, undefined).pipe(
             Effect.as({
               ...childProjection,
@@ -646,6 +655,33 @@ describe("OrchestratorMcpService provider resolution", () => {
         );
       }).pipe(Effect.provide(fixture.layer));
     }),
+  );
+
+  it.effect.each(["error", "defect"] as const)(
+    "preserves a wait's %s while recovering completion delivery",
+    (readFailure) =>
+      Effect.gen(function* () {
+        const fixture = yield* waitFixture({ readFailure });
+        yield* Effect.gen(function* () {
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          const exit = yield* Effect.exit(
+            service.delegateTask(scope, {
+              task: "Summarize the diff.",
+              mode: "wait",
+              clientRequestId: "failed-wait",
+            }),
+          );
+          assert.equal(exit._tag, "Failure");
+          if (exit._tag === "Failure") {
+            assert.equal(Cause.hasDies(exit.cause), readFailure === "defect");
+            assert.equal(Cause.hasFails(exit.cause), readFailure === "error");
+          }
+          assert.deepEqual(
+            fixture.commands.map((command) => command.type),
+            ["delegated_task.request", "delegated_task.wake-policy"],
+          );
+        }).pipe(Effect.provide(fixture.layer));
+      }),
   );
 
   it.effect("keeps successful waits on settled-only delivery", () =>
