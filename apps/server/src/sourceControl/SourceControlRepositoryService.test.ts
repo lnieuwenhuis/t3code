@@ -254,7 +254,7 @@ it.effect("reports clone progress from git's stderr and keeps its error text on 
     // Git echoes the remote in some failures; the credentials must not follow.
     assert.strictEqual(
       error.detail,
-      "fatal: early EOF fatal: unable to access 'https://github.com/octocat/t3code.git/': could not resolve host",
+      "The source control host could not be resolved. Check your network or VPN connection and try again.",
     );
   }).pipe(Effect.provide(NodeServices.layer)),
 );
@@ -346,6 +346,135 @@ it.effect("redacts query tokens and userinfo containing '@' from reported URLs",
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
+it.effect("returns actionable, transport-safe clone failures", () => {
+  const cases: ReadonlyArray<{ stderr: string; expected: string; remoteUrl?: string }> = [
+    {
+      stderr: "Host key verification failed.\nfatal: Could not read from remote repository.\n",
+      expected:
+        "SSH could not verify the source control host. Add its host key to known_hosts and try again.",
+    },
+    {
+      stderr: "git@example.com: Permission denied (publickey).\n",
+      expected:
+        "SSH authentication failed. Add an SSH key to your source control account and try again.",
+    },
+    {
+      stderr:
+        "git@ssh.dev.azure.com: Public key authentication failed.\nfatal: Could not read from remote repository.\n",
+      expected:
+        "SSH authentication failed. Add an SSH key to your source control account and try again.",
+    },
+    {
+      stderr:
+        "fatal: could not read Username for 'https://example.com': terminal prompts disabled\n",
+      expected:
+        "HTTPS authentication failed. Configure Git credentials for the source control host and try again.",
+    },
+    {
+      stderr:
+        "ssh: Could not resolve hostname example.com: nodename nor servname provided\nfatal: Could not read from remote repository.\n",
+      expected:
+        "The source control host could not be resolved. Check your network or VPN connection and try again.",
+    },
+    {
+      stderr:
+        "ssh: connect to host github.com port 22: Operation timed out\nfatal: Could not read from remote repository.\n",
+      expected:
+        "Git could not connect to the source control host. Check your network or VPN connection and try again.",
+    },
+    ...(
+      [
+        [
+          CLONE_URLS.sshUrl,
+          "SSH authentication failed. Add an SSH key to your source control account and try again.",
+        ],
+        [
+          CLONE_URLS.url,
+          "HTTPS authentication failed. Configure Git credentials for the source control host and try again.",
+        ],
+        [
+          "custom::repository",
+          "Git authentication failed. Check the credentials configured for this remote and try again.",
+        ],
+      ] as const
+    ).map(([remoteUrl, expected]) => ({
+      remoteUrl,
+      stderr: "fatal: Authentication failed",
+      expected,
+    })),
+    {
+      stderr: "fatal: early EOF https://user:secret@github.com/octocat/repo.git\n",
+      expected: "fatal: early EOF https://github.com/octocat/repo.git",
+    },
+    {
+      stderr: "fatal: an unrecognized clone failure\n",
+      expected: "fatal: an unrecognized clone failure",
+    },
+  ] as const;
+
+  return Effect.forEach(cases, ({ stderr, expected, remoteUrl }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const parent = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-source-control-clone-failure-",
+      });
+      const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
+      const error = yield* Effect.flip(
+        service.cloneRepository({
+          remoteUrl: remoteUrl ?? CLONE_URLS.sshUrl,
+          destinationPath: `${parent}/t3code`,
+        }),
+      );
+
+      assert.strictEqual(error.operation, "cloneRepository");
+      assert.strictEqual(error.provider, remoteUrl === "custom::repository" ? "unknown" : "github");
+      assert.strictEqual(error.detail, expected);
+      assert.instanceOf(error.cause, GitCommandError);
+      assert.strictEqual(error.cause.detail, "git clone exited with a non-zero status.");
+      assert.strictEqual(error.cause.stderrLength, stderr.length);
+    }).pipe(
+      Effect.provide(
+        makeLayer({
+          git: {
+            execute: () =>
+              Effect.succeed({
+                ...processOutput(),
+                exitCode: ChildProcessSpawner.ExitCode(128),
+                stderr,
+              }),
+          },
+        }),
+      ),
+    ),
+  ).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
+});
+
+it.effect("retains the inferred provider on destination validation failures", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const parent = yield* fs.makeTempDirectoryScoped({ prefix: "t3-clone-destination-" });
+    const file = path.join(parent, "file");
+    yield* fs.writeFileString(file, "occupied");
+    const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
+    for (const [destinationPath, detail] of [
+      [" ", "Choose a destination path before cloning."],
+      [file, "Destination path already exists and is not a directory."],
+      [parent, "Destination path already exists and is not empty."],
+    ] as const) {
+      const error = yield* Effect.flip(
+        service.cloneRepository({
+          remoteUrl: `  ${CLONE_URLS.url}  `,
+          destinationPath,
+        }),
+      );
+      assert.strictEqual(error.provider, "github");
+      assert.strictEqual(error.detail, detail);
+      assert.strictEqual(error.operation, "cloneRepository");
+    }
+  }).pipe(Effect.provide(Layer.merge(makeLayer({}), NodeServices.layer))),
+);
+
 it.effect("preserves destination probe failures instead of treating them as missing paths", () => {
   const fileSystemCause = PlatformError.systemError({
     _tag: "PermissionDenied",
@@ -363,7 +492,7 @@ it.effect("preserves destination probe failures instead of treating them as miss
       }),
     );
 
-    assert.strictEqual(error.provider, "unknown");
+    assert.strictEqual(error.provider, "github");
     assert.strictEqual(error.operation, "cloneRepository");
     assert.strictEqual(error.cause, fileSystemCause);
   }).pipe(
