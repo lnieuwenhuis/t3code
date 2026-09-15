@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFSP from "node:fs/promises";
 
+import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -21,8 +22,15 @@ import type {
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { isExplicitRelativePath, isWindowsAbsolutePath } from "@t3tools/shared/path";
-import { normalizeSearchQuery } from "@t3tools/shared/searchRanking";
+import {
+  insertRankedSearchResult,
+  scoreQueryMatch,
+  type RankedSearchResult,
+  normalizeSearchQuery,
+} from "@t3tools/shared/searchRanking";
 
+import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
+import { resolveClaudeRespectGitignore } from "../provider/claudeSettings.ts";
 import { expandHomePathWith } from "../pathExpansion.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspacePaths from "./WorkspacePaths.ts";
@@ -138,6 +146,74 @@ export const make = Effect.gen(function* () {
   const workspaceSearchIndexes = yield* WorkspaceSearchIndex.WorkspaceSearchIndexMap;
   const vcsProcess = yield* VcsProcess.VcsProcess;
 
+  // fff does not expose gitignore configuration. Keep the Claude opt-out on
+  // the bounded filesystem path used by the fork's composer search.
+  const settingsCache = yield* Cache.makeWith(resolveClaudeRespectGitignore, {
+    capacity: 4,
+    timeToLive: () => "5 seconds",
+  });
+  const unfilteredIndexCache = yield* Cache.makeWith(
+    Effect.fn("WorkspaceEntries.scanUnfiltered")(function* (cwd: string) {
+      const excluded = new Set([
+        ".git",
+        ".convex",
+        "node_modules",
+        ".next",
+        ".turbo",
+        "dist",
+        "build",
+        "out",
+        ".cache",
+      ]);
+      const pending = [""];
+      const entries: ProjectEntry[] = [];
+      while (pending.length > 0 && entries.length < 25_000) {
+        const batch = pending.splice(0, 32);
+        const directories = yield* Effect.forEach(
+          batch,
+          (relativePath) =>
+            Effect.tryPromise({
+              try: () => NodeFSP.readdir(path.join(cwd, relativePath), { withFileTypes: true }),
+              catch: (cause) =>
+                new WorkspaceEntriesReadDirectoryError({
+                  cwd,
+                  partialPath: relativePath,
+                  parentPath: path.join(cwd, relativePath),
+                  cause,
+                }),
+            }).pipe(
+              Effect.catchIf(
+                (error) =>
+                  ["EACCES", "EPERM", "ENOENT"].includes(
+                    (error.cause as NodeJS.ErrnoException)?.code ?? "",
+                  ),
+                () => Effect.succeed([]),
+              ),
+              Effect.map((children) => ({ relativePath, children })),
+            ),
+          { concurrency: 32 },
+        );
+        for (const { relativePath, children } of directories) {
+          for (const child of children.sort((a, b) => a.name.localeCompare(b.name))) {
+            if (
+              child.name === ".git" ||
+              (child.isDirectory() && excluded.has(child.name)) ||
+              (!child.isDirectory() && !child.isFile())
+            )
+              continue;
+            const entryPath = relativePath ? `${relativePath}/${child.name}` : child.name;
+            entries.push({ path: entryPath, kind: child.isDirectory() ? "directory" : "file" });
+            if (child.isDirectory()) pending.push(entryPath);
+            if (entries.length >= 25_000) break;
+          }
+          if (entries.length >= 25_000) break;
+        }
+      }
+      return { entries, truncated: entries.length >= 25_000 };
+    }),
+    { capacity: 4, timeToLive: () => "15 seconds" },
+  );
+
   const normalizeWorkspaceRoot = Effect.fn("WorkspaceEntries.normalizeWorkspaceRoot")(function* (
     cwd: string,
   ): Effect.fn.Return<string, WorkspaceEntriesError> {
@@ -149,6 +225,8 @@ export const make = Effect.gen(function* () {
       const normalizedCwd = yield* normalizeWorkspaceRoot(cwd).pipe(
         Effect.orElseSucceed(() => cwd),
       );
+      yield* Cache.invalidate(settingsCache, normalizedCwd);
+      yield* Cache.invalidate(unfilteredIndexCache, normalizedCwd);
       for (const variant of WorkspaceSearchIndex.WORKSPACE_SEARCH_INDEX_VARIANTS) {
         const indexKey = WorkspaceSearchIndex.workspaceSearchIndexKey(normalizedCwd, variant);
         if (!(yield* RcMap.has(workspaceSearchIndexes.rcMap, indexKey))) {
@@ -238,6 +316,52 @@ export const make = Effect.gen(function* () {
       const normalizedQuery = normalizeSearchQuery(input.query, {
         trimLeadingPattern: /^[@./]+/,
       });
+      if (!(yield* Cache.get(settingsCache, normalizedCwd))) {
+        const index = yield* Cache.get(unfilteredIndexCache, normalizedCwd);
+        const ranked: RankedSearchResult<ProjectEntry>[] = [];
+        let matches = 0;
+        for (const entry of index.entries) {
+          if (
+            (!input.imageOnly && input.kind && entry.kind !== input.kind) ||
+            (input.imageOnly && (entry.kind !== "file" || !isWorkspaceImagePreviewPath(entry.path)))
+          )
+            continue;
+          const normalizedPath = entry.path.toLowerCase();
+          const scores = normalizedQuery
+            ? [
+                scoreQueryMatch({
+                  value: normalizedPath.slice(normalizedPath.lastIndexOf("/") + 1),
+                  query: normalizedQuery,
+                  exactBase: 0,
+                  prefixBase: 2,
+                  includesBase: 5,
+                  fuzzyBase: 100,
+                }),
+                scoreQueryMatch({
+                  value: normalizedPath,
+                  query: normalizedQuery,
+                  exactBase: 1,
+                  prefixBase: 3,
+                  boundaryBase: 4,
+                  includesBase: 6,
+                  fuzzyBase: 200,
+                  boundaryMarkers: ["/"],
+                }),
+              ].filter((score): score is number => score !== null)
+            : [entry.kind === "directory" ? 0 : 1];
+          if (scores.length === 0) continue;
+          matches += 1;
+          insertRankedSearchResult(
+            ranked,
+            { item: entry, score: Math.min(...scores), tieBreaker: entry.path },
+            input.limit,
+          );
+        }
+        return {
+          entries: ranked.map(({ item }) => item),
+          truncated: index.truncated || matches > input.limit,
+        };
+      }
       return yield* Effect.gen(function* () {
         const searchIndex = yield* WorkspaceSearchIndex.WorkspaceSearchIndex;
         return yield* searchIndex.search(normalizedQuery, input.limit, input.kind, input.imageOnly);

@@ -2513,10 +2513,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         pullRequestTriggerNumber !== debouncedPullRequestNumber ||
         exactPullRequestLookup.isPending));
   const workspaceEntriesPartialResultsHint =
-    !workspaceEntriesQuery.isLoading &&
-    composerTriggerKind === "path" &&
-    workspaceEntriesQuery.data?.truncated
-      ? workspaceEntries.length === 0
+    !workspaceEntries.isPending && composerTriggerKind === "path" && workspaceEntries.truncated
+      ? workspaceEntries.entries.length === 0
         ? "Workspace results are partial. Refine your query to search more precisely."
         : "Showing partial results. Refine your query to narrow the file search."
       : null;

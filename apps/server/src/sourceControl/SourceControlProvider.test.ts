@@ -23,6 +23,7 @@ it("normalizes control characters and bounds error transport values", () => {
 
 it("names the change request head ref in each host's own namespace", () => {
   assert.strictEqual(changeRequestHeadRef("github", 42), "refs/pull/42/head");
+  assert.strictEqual(changeRequestHeadRef("forgejo", 42), "refs/pull/42/head");
   assert.strictEqual(changeRequestHeadRef("gitlab", 533), "refs/merge-requests/533/head");
 });
 

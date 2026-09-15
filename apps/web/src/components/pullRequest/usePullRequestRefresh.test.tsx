@@ -102,6 +102,17 @@ afterEach(async () => {
 });
 
 describe("mounted pull request refresh sequencing", () => {
+  it("waits for an existing activity read before refreshing a changed revision", async () => {
+    await render();
+    await render({ detail: { updatedAt: "2026-09-10T11:00:00Z" }, activityIsPending: true });
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(refreshActivity).not.toHaveBeenCalled();
+    await render({ activityIsPending: false });
+    expect(invalidate).toHaveBeenCalledOnce();
+    expect(refreshActivity).toHaveBeenCalledOnce();
+    expect(diffRefreshes()).toBe("1");
+  });
+
   it("awaits detail-only poll invalidation and preserves activity and diff for unchanged metadata", async () => {
     await render();
     expect(invalidate).not.toHaveBeenCalled();
