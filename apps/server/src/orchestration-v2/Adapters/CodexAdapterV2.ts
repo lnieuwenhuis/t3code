@@ -2182,11 +2182,11 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               updated.set(turn.nativeTurnId, activeContext);
               return updated;
             });
-            if (providerTurnOrdinal > 1 && subagent.task.status !== "running") {
+            if (subagent.task.status !== "running") {
               yield* emitSubagentTaskUpdate({
                 subagent,
                 status: "running",
-                result: null,
+                ...(providerTurnOrdinal > 1 ? { result: null } : {}),
               });
             }
             const now = yield* DateTime.now;
@@ -2559,9 +2559,16 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               if (subagent === undefined) {
                 continue;
               }
+              const status = codexSubagentStatus(state.status);
+              // A child turn can start before its spawn snapshot arrives.
+              const alreadyStarted =
+                status === "pending" &&
+                Array.from((yield* Ref.get(activeTurns)).values()).some(
+                  (context) => context.subagent === subagent,
+                );
               yield* emitSubagentTaskUpdate({
                 subagent,
-                status: codexSubagentStatus(state.status),
+                status: alreadyStarted ? "running" : status,
                 ...(state.message === null ? {} : { result: state.message }),
               });
             }
@@ -5095,7 +5102,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               }
             }
             for (const subagent of (yield* Ref.get(subagentThreads)).values()) {
-              if (subagent.task.status === "running") {
+              if (subagent.task.status === "pending" || subagent.task.status === "running") {
                 return true;
               }
             }

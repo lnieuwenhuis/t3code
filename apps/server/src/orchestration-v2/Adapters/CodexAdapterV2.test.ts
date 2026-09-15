@@ -5507,6 +5507,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           );
           yield* Deferred.await(projected);
 
+          assert.equal(yield* harness.hasPendingBackgroundWork, !terminal);
           const updates = harness.subagentUpdates().slice(-3);
           assert.lengthOf(updates, 3);
           assert.equal(updates[0]?.subagent.result, "Previous result");
@@ -5529,6 +5530,97 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           }
         }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
       ),
+    );
+  }
+
+  for (const childStartsFirst of [false, true]) {
+    it.effect(
+      `marks an initializing subagent running when its first native turn starts (child first: ${childStartsFirst})`,
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const nativeThreadId = "pending-parent";
+            const nativeTurnId = "pending-parent-turn";
+            const childThreadId = "pending-child";
+            const childTurnId = "pending-child-turn";
+            const prompt = "Delegate a task.";
+            const transcript = makeCodexReplayTranscript({
+              scenario: "pending-subagent-first-turn",
+              entries: [
+                ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt }),
+                {
+                  type: "emit_inbound",
+                  label: "item/completed/spawn-pending",
+                  frame: {
+                    method: "item/completed",
+                    params: {
+                      threadId: nativeThreadId,
+                      turnId: nativeTurnId,
+                      item: {
+                        type: "collabAgentToolCall",
+                        id: "spawn-pending",
+                        tool: "spawnAgent",
+                        status: "completed",
+                        senderThreadId: nativeThreadId,
+                        receiverThreadIds: [childThreadId],
+                        prompt,
+                        agentsStates: { [childThreadId]: { status: "pendingInit", message: null } },
+                      },
+                    },
+                  },
+                },
+                {
+                  type: "emit_inbound",
+                  label: "turn/started/child",
+                  frame: {
+                    method: "turn/started",
+                    params: {
+                      threadId: childThreadId,
+                      turn: makeCodexReplayTurn({ id: childTurnId, status: "inProgress" }),
+                    },
+                  },
+                },
+              ],
+            });
+            const entries = [...transcript.entries];
+            if (childStartsFirst) {
+              const childStart = entries.pop()!;
+              const spawn = entries.pop()!;
+              entries.push(childStart, spawn);
+            }
+            entries.push({
+              type: "emit_inbound",
+              label: "turn/completed/parent",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                },
+              },
+            });
+            const harness = yield* makeCodexReplayHarness({ ...transcript, entries });
+            const now = yield* DateTime.now;
+            yield* harness.runtime.startTurn(
+              makeCodexTestTurnInput({
+                threadId: harness.threadId,
+                providerThread: harness.providerThread,
+                now,
+                attemptId: RunAttemptId.make("attempt-pending-first-turn"),
+                text: prompt,
+              }),
+            );
+            yield* harness.firstTerminal;
+            if (!childStartsFirst) {
+              assert.isTrue(
+                harness.subagentUpdates().some((event) => event.subagent.status === "pending"),
+              );
+            }
+            assert.isTrue(yield* harness.hasPendingBackgroundWork);
+            assert.equal(harness.subagentUpdates().at(-1)?.subagent.status, "running");
+            assert.isNull(harness.subagentUpdates().at(-1)?.subagent.completedAt);
+          }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+        ),
     );
   }
 
