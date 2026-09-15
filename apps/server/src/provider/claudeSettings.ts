@@ -1,5 +1,7 @@
-import * as OS from "node:os";
-import { Effect, FileSystem, Path } from "effect";
+import * as NodeOS from "node:os";
+import { Effect, FileSystem, Path, Schema } from "effect";
+
+const decodeSettings = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
 function getBooleanProperty(record: Record<string, unknown>, key: string): boolean | undefined {
   const value = record[key];
@@ -36,13 +38,10 @@ function readClaudeRespectGitignoreFromFile(settingsPath: string) {
       return undefined;
     }
 
-    return yield* Effect.sync(() => {
-      try {
-        return extractClaudeRespectGitignore(JSON.parse(contents));
-      } catch {
-        return undefined;
-      }
-    });
+    return yield* decodeSettings(contents).pipe(
+      Effect.map(extractClaudeRespectGitignore),
+      Effect.orElseSucceed(() => undefined),
+    );
   });
 }
 
@@ -50,7 +49,7 @@ export function resolveClaudeRespectGitignore(cwd: string, options?: { homeDirec
   return Effect.gen(function* () {
     const path = yield* Path.Path;
     const homeDirectory =
-      options?.homeDirectory ?? process.env.HOME ?? process.env.USERPROFILE ?? OS.homedir();
+      options?.homeDirectory ?? process.env.HOME ?? process.env.USERPROFILE ?? NodeOS.homedir();
     const candidatePaths = [
       path.join(homeDirectory, ".claude.json"),
       path.join(homeDirectory, ".claude", "settings.json"),

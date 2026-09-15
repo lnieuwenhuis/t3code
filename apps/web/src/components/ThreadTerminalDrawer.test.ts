@@ -1,137 +1,145 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
-  resolveTerminalSelectionActionPosition,
-  selectPendingTerminalEventEntries,
-  selectTerminalEventEntriesAfterSnapshot,
-  shouldHandleTerminalSelectionMouseUp,
-  terminalSelectionActionDelayForClickCount,
+  shouldClearTerminalSelectionAction,
+  shouldHandleTerminalExit,
+  terminalContextMenuItems,
+  terminalSelectionLineRange,
+  terminalSelectionMenuItems,
+  terminalThemeFromApp,
 } from "./ThreadTerminalDrawer";
 
-describe("resolveTerminalSelectionActionPosition", () => {
-  it("prefers the selection rect over the last pointer position", () => {
+describe("terminal selection menus", () => {
+  it("omits Add to chat when the terminal has no chat target", () => {
+    expect(terminalSelectionMenuItems().map(({ id }) => id)).toEqual(["add-to-chat", "copy"]);
+    expect(terminalContextMenuItems({ hasSelection: true }).map(({ id }) => id)).toEqual([
+      "add-to-chat",
+      "copy",
+      "paste",
+    ]);
+
+    expect(terminalSelectionMenuItems({ canAddToChat: false }).map(({ id }) => id)).toEqual([
+      "copy",
+    ]);
     expect(
-      resolveTerminalSelectionActionPosition({
-        bounds: { left: 100, top: 50, width: 500, height: 220 },
-        selectionRect: { right: 260, bottom: 140 },
-        pointer: { x: 520, y: 200 },
-        viewport: { width: 1024, height: 768 },
-      }),
-    ).toEqual({
-      x: 260,
-      y: 144,
-    });
+      terminalContextMenuItems({ hasSelection: true, canAddToChat: false }).map(({ id }) => id),
+    ).toEqual(["copy", "paste"]);
+  });
+});
+
+describe("terminalThemeFromApp", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
-  it("falls back to the pointer position when no selection rect is available", () => {
-    expect(
-      resolveTerminalSelectionActionPosition({
-        bounds: { left: 100, top: 50, width: 500, height: 220 },
-        selectionRect: null,
-        pointer: { x: 180, y: 130 },
-        viewport: { width: 1024, height: 768 },
-      }),
-    ).toEqual({
-      x: 180,
-      y: 130,
-    });
-  });
+  it("uses terminal colors inherited by the mount instead of a light document theme", () => {
+    const root = { classList: { contains: () => false } };
+    const body = {};
+    const drawer = {};
+    let canvasColor = "#000";
+    const colors: Record<string, [number, number, number, number]> = {
+      "#000": [0, 0, 0, 255],
+      "#fff": [255, 255, 255, 255],
+      "#ddd": [221, 221, 221, 255],
+      "#111": [17, 17, 17, 255],
+    };
 
-  it("clamps the pointer fallback into the terminal drawer bounds", () => {
-    expect(
-      resolveTerminalSelectionActionPosition({
-        bounds: { left: 100, top: 50, width: 500, height: 220 },
-        selectionRect: null,
-        pointer: { x: 720, y: 340 },
-        viewport: { width: 1024, height: 768 },
-      }),
-    ).toEqual({
-      x: 600,
-      y: 270,
-    });
-
-    expect(
-      resolveTerminalSelectionActionPosition({
-        bounds: { left: 100, top: 50, width: 500, height: 220 },
-        selectionRect: null,
-        pointer: { x: 40, y: 20 },
-        viewport: { width: 1024, height: 768 },
-      }),
-    ).toEqual({
-      x: 100,
-      y: 50,
-    });
-  });
-
-  it("delays multi-click selection actions so triple-click selection can complete", () => {
-    expect(terminalSelectionActionDelayForClickCount(1)).toBe(0);
-    expect(terminalSelectionActionDelayForClickCount(2)).toBe(260);
-    expect(terminalSelectionActionDelayForClickCount(3)).toBe(260);
-  });
-
-  it("only handles mouseup when the selection gesture started in the terminal", () => {
-    expect(shouldHandleTerminalSelectionMouseUp(true, 0)).toBe(true);
-    expect(shouldHandleTerminalSelectionMouseUp(false, 0)).toBe(false);
-    expect(shouldHandleTerminalSelectionMouseUp(true, 1)).toBe(false);
-  });
-
-  it("replays only terminal events newer than the open snapshot", () => {
-    expect(
-      selectTerminalEventEntriesAfterSnapshot(
-        [
-          {
-            id: 1,
-            event: {
-              threadId: "thread-1",
-              terminalId: "default",
-              createdAt: "2026-04-02T20:00:00.000Z",
-              type: "output",
-              data: "before",
-            },
+    vi.stubGlobal("document", {
+      documentElement: root,
+      body,
+      querySelector: () => drawer,
+      createElement: () => ({
+        width: 0,
+        height: 0,
+        getContext: () => ({
+          clearRect: () => undefined,
+          fillRect: () => undefined,
+          get fillStyle() {
+            return canvasColor;
           },
-          {
-            id: 2,
-            event: {
-              threadId: "thread-1",
-              terminalId: "default",
-              createdAt: "2026-04-02T20:00:01.000Z",
-              type: "output",
-              data: "after",
-            },
+          set fillStyle(value: string) {
+            canvasColor = value;
           },
-        ],
-        "2026-04-02T20:00:00.500Z",
-      ).map((entry) => entry.id),
-    ).toEqual([2]);
+          getImageData: () => ({ data: colors[canvasColor] ?? [0, 0, 0, 0] }),
+        }),
+      }),
+    });
+    vi.stubGlobal("getComputedStyle", (element: object) => {
+      const local = element === drawer;
+      const values = local
+        ? {
+            "--terminal-background": "#000",
+            "--terminal-foreground": "#fff",
+            "--terminal-cursor": "#ddd",
+            "--terminal-selection-background": "rgba(255, 255, 255, 0.2)",
+          }
+        : {
+            "--terminal-background": "#fff",
+            "--terminal-foreground": "#111",
+          };
+      return {
+        backgroundColor: local ? "#000" : "#fff",
+        color: local ? "#fff" : "#111",
+        colorScheme: local ? "dark" : "light",
+        getPropertyValue: (name: string) => values[name as keyof typeof values] ?? "",
+      };
+    });
+
+    const theme = terminalThemeFromApp();
+
+    expect(theme.background).toEqual({ r: 0, g: 0, b: 0 });
+    expect(theme.foreground).toEqual({ r: 255, g: 255, b: 255 });
+    expect(theme.cursor).toEqual({ r: 221, g: 221, b: 221 });
+  });
+});
+
+describe("terminal selection actions", () => {
+  it("clears a pending or currently owned menu when the selection disappears", () => {
+    expect(
+      shouldClearTerminalSelectionAction({
+        actionPending: true,
+        openMenuRequestId: null,
+        currentRequestId: 4,
+      }),
+    ).toBe(true);
+    expect(
+      shouldClearTerminalSelectionAction({
+        actionPending: false,
+        openMenuRequestId: 4,
+        currentRequestId: 4,
+      }),
+    ).toBe(true);
   });
 
-  it("applies only terminal events that have not already been consumed", () => {
+  it("does not let an old selection popup cancel its replacement right-click menu", () => {
     expect(
-      selectPendingTerminalEventEntries(
-        [
-          {
-            id: 1,
-            event: {
-              threadId: "thread-1",
-              terminalId: "default",
-              createdAt: "2026-04-02T20:00:00.000Z",
-              type: "output",
-              data: "one",
-            },
-          },
-          {
-            id: 2,
-            event: {
-              threadId: "thread-1",
-              terminalId: "default",
-              createdAt: "2026-04-02T20:00:01.000Z",
-              type: "output",
-              data: "two",
-            },
-          },
-        ],
-        1,
-      ).map((entry) => entry.id),
-    ).toEqual([2]);
+      shouldClearTerminalSelectionAction({
+        actionPending: false,
+        openMenuRequestId: 3,
+        currentRequestId: 4,
+      }),
+    ).toBe(false);
+    expect(
+      shouldClearTerminalSelectionAction({
+        actionPending: false,
+        openMenuRequestId: null,
+        currentRequestId: 4,
+      }),
+    ).toBe(false);
+  });
+
+  it("uses Ghostty's physical screen range for visually wrapped selections", () => {
+    expect(
+      terminalSelectionLineRange({
+        start: { y: 4 },
+        end: { y: 6 },
+      }),
+    ).toEqual({ lineStart: 5, lineEnd: 7 });
+  });
+
+  it("handles an exit that lands while the terminal surface is still loading", () => {
+    expect(shouldHandleTerminalExit("exited", "running", false)).toBe(true);
+    expect(shouldHandleTerminalExit("exited", "exited", false)).toBe(false);
+    expect(shouldHandleTerminalExit("closed", "running", true)).toBe(false);
   });
 });

@@ -1,25 +1,16 @@
-import { createElement } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRouter, RouterHistory } from "@tanstack/react-router";
 
-import { AppAtomRegistryProvider } from "./rpc/atomRegistry";
 import { routeTree } from "./routeTree.gen";
 
 export function getRouter(history: RouterHistory) {
-  const queryClient = new QueryClient();
-
   return createRouter({
     routeTree,
     history,
-    context: {
-      queryClient,
-    },
-    Wrap: ({ children }) =>
-      createElement(
-        QueryClientProvider,
-        { client: queryClient },
-        createElement(AppAtomRegistryProvider, undefined, children),
-      ),
+    context: {},
+    // Route components are split chunks (autoCodeSplitting in vite.config);
+    // fetching them on hover/focus intent hides the load from the first
+    // settings or pull-request navigation.
+    defaultPreload: "intent",
   });
 }
 

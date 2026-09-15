@@ -1,8 +1,12 @@
-import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
-import { describe, expect, it } from "vitest";
+import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import { describe, expect, it } from "vite-plus/test";
 
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
-import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "./worktreeCleanup";
+import {
+  formatWorktreePathForDisplay,
+  getOrphanedWorktreePathForThread,
+  resolveOrphanedWorktreePathForDelete,
+} from "./worktreeCleanup";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
 
@@ -10,23 +14,26 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
   return {
     id: ThreadId.make("thread-1"),
     environmentId: localEnvironmentId,
-    codexThreadId: null,
     projectId: ProjectId.make("project-1"),
     title: "Thread",
     modelSelection: {
-      provider: "codex",
+      instanceId: ProviderInstanceId.make("codex"),
       model: "gpt-5.3-codex",
     },
     runtimeMode: DEFAULT_RUNTIME_MODE,
     interactionMode: DEFAULT_INTERACTION_MODE,
     session: null,
     messages: [],
-    turnDiffSummaries: [],
+    checkpoints: [],
+    pullRequests: [],
     activities: [],
     proposedPlans: [],
-    error: null,
     createdAt: "2026-02-13T00:00:00.000Z",
+    updatedAt: "2026-02-13T00:00:00.000Z",
     archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
+    deletedAt: null,
     latestTurn: null,
     branch: null,
     worktreePath: null,
@@ -80,6 +87,73 @@ describe("getOrphanedWorktreePathForThread", () => {
     ];
     const result = getOrphanedWorktreePathForThread(threads, ThreadId.make("thread-1"));
     expect(result).toBe("/tmp/repo/worktrees/feature-a");
+  });
+});
+
+describe("resolveOrphanedWorktreePathForDelete", () => {
+  it("is not orphaned when an archived sibling is still linked (t3code#9085)", async () => {
+    const threads = [
+      makeThread({
+        id: ThreadId.make("thread-1"),
+        worktreePath: "/tmp/repo/worktrees/feature-a",
+      }),
+    ];
+    const archivedSibling = makeThread({
+      id: ThreadId.make("thread-2"),
+      worktreePath: "/tmp/repo/worktrees/feature-a",
+      archivedAt: "2026-02-14T00:00:00.000Z",
+    });
+    const result = await resolveOrphanedWorktreePathForDelete({
+      threads,
+      threadId: ThreadId.make("thread-1"),
+      fetchArchivedThreads: async () => [archivedSibling],
+    });
+    expect(result).toBeNull();
+  });
+
+  it("is orphaned when no archived sibling links to the worktree", async () => {
+    const threads = [
+      makeThread({
+        id: ThreadId.make("thread-1"),
+        worktreePath: "/tmp/repo/worktrees/feature-a",
+      }),
+    ];
+    const result = await resolveOrphanedWorktreePathForDelete({
+      threads,
+      threadId: ThreadId.make("thread-1"),
+      fetchArchivedThreads: async () => [],
+    });
+    expect(result).toBe("/tmp/repo/worktrees/feature-a");
+  });
+
+  it("does not authorize worktree cleanup when archived siblings cannot be checked", async () => {
+    const threads = [
+      makeThread({
+        id: ThreadId.make("thread-1"),
+        worktreePath: "/tmp/repo/worktrees/feature-a",
+      }),
+    ];
+    const result = await resolveOrphanedWorktreePathForDelete({
+      threads,
+      threadId: ThreadId.make("thread-1"),
+      fetchArchivedThreads: async () => null,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("skips the archived fetch entirely when the thread has no worktree", async () => {
+    const threads = [makeThread({ id: ThreadId.make("thread-1"), worktreePath: null })];
+    let fetchCalled = false;
+    const result = await resolveOrphanedWorktreePathForDelete({
+      threads,
+      threadId: ThreadId.make("thread-1"),
+      fetchArchivedThreads: async () => {
+        fetchCalled = true;
+        return [];
+      },
+    });
+    expect(result).toBeNull();
+    expect(fetchCalled).toBe(false);
   });
 });
 

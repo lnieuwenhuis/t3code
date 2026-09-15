@@ -1,168 +1,94 @@
+import { imageMimeType } from "@t3tools/shared/image";
 import type {
-  EnvironmentId,
-  ModelSelection,
+  ChatFileAttachment as ContractChatFileAttachment,
+  ChatImageAttachment as ContractChatImageAttachment,
+  ChatUnknownAttachment as ContractChatUnknownAttachment,
+  OrchestrationCheckpointFile,
+  OrchestrationCheckpointSummary,
   OrchestrationLatestTurn,
-  OrchestrationProposedPlanId,
-  RepositoryIdentity,
-  OrchestrationSessionStatus,
-  OrchestrationThreadActivity,
+  OrchestrationMessage,
+  OrchestrationProposedPlan,
+  OrchestrationSession,
   ProjectScript as ContractProjectScript,
-  ThreadId,
-  ProjectId,
-  TurnId,
-  MessageId,
-  ProviderKind,
-  CheckpointRef,
   ProviderInteractionMode,
   RuntimeMode,
 } from "@t3tools/contracts";
+import type {
+  EnvironmentProject,
+  EnvironmentThread,
+  EnvironmentThreadShell,
+} from "@t3tools/client-runtime/state/shell";
+import { videoMimeType } from "@t3tools/shared/video";
+
+export { videoMimeType } from "@t3tools/shared/video";
 
 export type SessionPhase = "disconnected" | "connecting" | "ready" | "running";
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 
 export const DEFAULT_INTERACTION_MODE: ProviderInteractionMode = "default";
 export const DEFAULT_THREAD_TERMINAL_HEIGHT = 280;
-export const DEFAULT_THREAD_TERMINAL_ID = "default";
+export const DEFAULT_THREAD_TERMINAL_ID = "term-1";
 export const MAX_TERMINALS_PER_GROUP = 4;
 export type ProjectScript = ContractProjectScript;
 
 export interface ThreadTerminalGroup {
   id: string;
   terminalIds: string[];
+  splitDirection?: "horizontal" | "vertical";
 }
 
-export interface ChatImageAttachment {
-  type: "image";
-  id: string;
-  name: string;
-  mimeType: string;
-  sizeBytes: number;
-  previewUrl?: string;
+export interface ChatImageAttachment extends ContractChatImageAttachment {
+  readonly previewUrl?: string;
 }
 
-export type ChatAttachment = ChatImageAttachment;
-
-export interface ChatMessage {
-  id: MessageId;
-  role: "user" | "assistant" | "system";
-  text: string;
-  attachments?: ChatAttachment[];
-  turnId?: TurnId | null;
-  createdAt: string;
-  completedAt?: string | undefined;
-  streaming: boolean;
+export interface ChatFileAttachment extends ContractChatFileAttachment {
+  readonly previewUrl?: string;
+  readonly downloadable?: boolean;
 }
 
-export interface ProposedPlan {
-  id: OrchestrationProposedPlanId;
-  turnId: TurnId | null;
-  planMarkdown: string;
-  implementedAt: string | null;
-  implementationThreadId: ThreadId | null;
-  createdAt: string;
-  updatedAt: string;
+// Attachment types this build does not know pass through with the contract
+// shape. The UI renders them as inert rows so a newer server cannot crash an
+// older client.
+export type ChatUnknownAttachment = ContractChatUnknownAttachment;
+
+export type ChatAttachment = ChatImageAttachment | ChatFileAttachment | ChatUnknownAttachment;
+
+// The union has an open member (`type: string`), so a literal comparison does
+// not narrow. Use these guards wherever type-specific fields are read.
+export function isImageAttachment(attachment: ChatAttachment): attachment is ChatImageAttachment {
+  // Messages sent before pictures were typed by content carry `file`; they are still
+  // pictures, and reading them as such is what lets them render instead of listing. Only
+  // `file` is reclassified: an attachment type this client does not know yet is not a
+  // picture by default, whatever its name says.
+  if (attachment.type === "image") return true;
+  return attachment.type === "file" && imageMimeType(attachment) !== null;
 }
 
-export interface TurnDiffFileChange {
-  path: string;
-  kind?: string | undefined;
-  additions?: number | undefined;
-  deletions?: number | undefined;
+export function isFileAttachment(attachment: ChatAttachment): attachment is ChatFileAttachment {
+  // Disjoint from `isImageAttachment` on purpose: a legacy `file` carrying an image reads as a
+  // picture, and callers filter both sets independently, so overlap renders it twice.
+  return attachment.type === "file" && !isImageAttachment(attachment);
 }
 
-export interface TurnDiffSummary {
-  turnId: TurnId;
-  completedAt: string;
-  status?: string | undefined;
-  files: TurnDiffFileChange[];
-  checkpointRef?: CheckpointRef | undefined;
-  assistantMessageId?: MessageId | undefined;
-  checkpointTurnCount?: number | undefined;
+export function isVideoAttachment(attachment: ChatFileAttachment): boolean {
+  return videoMimeType(attachment) !== null;
 }
 
-export interface Project {
-  id: ProjectId;
-  environmentId: EnvironmentId;
-  name: string;
-  cwd: string;
-  repositoryIdentity?: RepositoryIdentity | null;
-  defaultModelSelection: ModelSelection | null;
-  createdAt?: string | undefined;
-  updatedAt?: string | undefined;
-  scripts: ProjectScript[];
+export interface ChatMessage extends Omit<OrchestrationMessage, "attachments"> {
+  readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
 }
 
-export interface Thread {
-  id: ThreadId;
-  environmentId: EnvironmentId;
-  codexThreadId: string | null;
-  projectId: ProjectId;
-  title: string;
-  modelSelection: ModelSelection;
-  runtimeMode: RuntimeMode;
-  interactionMode: ProviderInteractionMode;
-  session: ThreadSession | null;
-  messages: ChatMessage[];
-  proposedPlans: ProposedPlan[];
-  error: string | null;
-  createdAt: string;
-  archivedAt: string | null;
-  updatedAt?: string | undefined;
-  latestTurn: OrchestrationLatestTurn | null;
-  pendingSourceProposedPlan?: OrchestrationLatestTurn["sourceProposedPlan"];
-  branch: string | null;
-  worktreePath: string | null;
-  turnDiffSummaries: TurnDiffSummary[];
-  activities: OrchestrationThreadActivity[];
-}
+export type ProposedPlan = OrchestrationProposedPlan;
+export type TurnDiffFileChange = OrchestrationCheckpointFile;
+export type TurnDiffSummary = OrchestrationCheckpointSummary;
 
-export interface ThreadShell {
-  id: ThreadId;
-  environmentId: EnvironmentId;
-  codexThreadId: string | null;
-  projectId: ProjectId;
-  title: string;
-  modelSelection: ModelSelection;
-  runtimeMode: RuntimeMode;
-  interactionMode: ProviderInteractionMode;
-  error: string | null;
-  createdAt: string;
-  archivedAt: string | null;
-  updatedAt?: string | undefined;
-  branch: string | null;
-  worktreePath: string | null;
-}
+export type Project = EnvironmentProject;
+export type Thread = EnvironmentThread;
+export type ThreadShell = EnvironmentThreadShell;
 
 export interface ThreadTurnState {
   latestTurn: OrchestrationLatestTurn | null;
-  pendingSourceProposedPlan?: OrchestrationLatestTurn["sourceProposedPlan"];
 }
 
-export interface SidebarThreadSummary {
-  id: ThreadId;
-  environmentId: EnvironmentId;
-  projectId: ProjectId;
-  title: string;
-  interactionMode: ProviderInteractionMode;
-  session: ThreadSession | null;
-  createdAt: string;
-  archivedAt: string | null;
-  updatedAt?: string | undefined;
-  latestTurn: OrchestrationLatestTurn | null;
-  branch: string | null;
-  worktreePath: string | null;
-  latestUserMessageAt: string | null;
-  hasPendingApprovals: boolean;
-  hasPendingUserInput: boolean;
-  hasActionableProposedPlan: boolean;
-}
-
-export interface ThreadSession {
-  provider: ProviderKind;
-  status: SessionPhase | "error" | "closed";
-  activeTurnId?: TurnId | undefined;
-  createdAt: string;
-  updatedAt: string;
-  lastError?: string;
-  orchestrationStatus: OrchestrationSessionStatus;
-}
+export type SidebarThreadSummary = EnvironmentThreadShell;
+export type ThreadSession = OrchestrationSession;

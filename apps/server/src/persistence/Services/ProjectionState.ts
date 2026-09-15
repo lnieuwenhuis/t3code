@@ -7,8 +7,10 @@
  * @module ProjectionStateRepository
  */
 import { IsoDateTime, NonNegativeInt } from "@t3tools/contracts";
-import { Option, Schema, Context } from "effect";
-import type { Effect } from "effect";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import * as Context from "effect/Context";
+import type * as Effect from "effect/Effect";
 
 import type { ProjectionRepositoryError } from "../Errors.ts";
 
@@ -34,6 +36,11 @@ export interface ProjectionStateRepositoryShape {
    * Upserts by projector name.
    */
   readonly upsert: (row: ProjectionState) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  /** Insert or replace projector cursors in one statement. Empty batches do nothing. */
+  readonly upsertMany: (
+    rows: ReadonlyArray<ProjectionState>,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
 
   /**
    * Read projection cursor state for a projector key.

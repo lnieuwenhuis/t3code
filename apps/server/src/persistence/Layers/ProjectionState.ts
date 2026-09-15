@@ -1,7 +1,9 @@
 import { NonNegativeInt } from "@t3tools/contracts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
-import { Effect, Layer, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 
 import { toPersistenceSqlError } from "../Errors.ts";
 
@@ -38,6 +40,26 @@ const makeProjectionStateRepository = Effect.gen(function* () {
           last_applied_sequence = excluded.last_applied_sequence,
           updated_at = excluded.updated_at
       `,
+  });
+
+  const upsertProjectionStateRows = SqlSchema.void({
+    Request: Schema.Array(ProjectionState),
+    execute: (rows) =>
+      rows.length === 0
+        ? Effect.void
+        : sql`
+            INSERT INTO projection_state ${sql.insert(
+              rows.map((row) => ({
+                projector: row.projector,
+                last_applied_sequence: row.lastAppliedSequence,
+                updated_at: row.updatedAt,
+              })),
+            )}
+            ON CONFLICT (projector)
+            DO UPDATE SET
+              last_applied_sequence = excluded.last_applied_sequence,
+              updated_at = excluded.updated_at
+          `,
   });
 
   const getProjectionStateRow = SqlSchema.findOneOption({
@@ -84,6 +106,11 @@ const makeProjectionStateRepository = Effect.gen(function* () {
       Effect.mapError(toPersistenceSqlError("ProjectionStateRepository.upsert:query")),
     );
 
+  const upsertMany: ProjectionStateRepositoryShape["upsertMany"] = (rows) =>
+    upsertProjectionStateRows(rows).pipe(
+      Effect.mapError(toPersistenceSqlError("ProjectionStateRepository.upsertMany:query")),
+    );
+
   const getByProjector: ProjectionStateRepositoryShape["getByProjector"] = (input) =>
     getProjectionStateRow(input).pipe(
       Effect.mapError(toPersistenceSqlError("ProjectionStateRepository.getByProjector:query")),
@@ -104,6 +131,7 @@ const makeProjectionStateRepository = Effect.gen(function* () {
 
   return {
     upsert,
+    upsertMany,
     getByProjector,
     listAll,
     minLastAppliedSequence,
