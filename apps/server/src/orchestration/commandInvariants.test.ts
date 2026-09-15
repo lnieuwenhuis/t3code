@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import {
   MessageId,
   CommandId,
@@ -7,18 +7,13 @@ import {
   ThreadId,
   type OrchestrationCommand,
   type OrchestrationReadModel,
+  ProviderInstanceId,
 } from "@t3tools/contracts";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 
-import {
-  findThreadById,
-  listThreadsByProjectId,
-  requireNonNegativeInteger,
-  requireThread,
-  requireThreadAbsent,
-} from "./commandInvariants.ts";
+import { listThreadsByProjectId, requireThread, requireThreadAbsent } from "./commandInvariants.ts";
 
-const now = new Date().toISOString();
+const now = "2026-01-01T00:00:00.000Z";
 
 const readModel: OrchestrationReadModel = {
   snapshotSequence: 2,
@@ -29,7 +24,7 @@ const readModel: OrchestrationReadModel = {
       title: "Project A",
       workspaceRoot: "/tmp/project-a",
       defaultModelSelection: {
-        provider: "codex",
+        instanceId: ProviderInstanceId.make("codex"),
         model: "gpt-5-codex",
       },
       scripts: [],
@@ -42,7 +37,7 @@ const readModel: OrchestrationReadModel = {
       title: "Project B",
       workspaceRoot: "/tmp/project-b",
       defaultModelSelection: {
-        provider: "codex",
+        instanceId: ProviderInstanceId.make("codex"),
         model: "gpt-5-codex",
       },
       scripts: [],
@@ -57,16 +52,19 @@ const readModel: OrchestrationReadModel = {
       projectId: ProjectId.make("project-a"),
       title: "Thread A",
       modelSelection: {
-        provider: "codex",
+        instanceId: ProviderInstanceId.make("codex"),
         model: "gpt-5-codex",
       },
       interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
       runtimeMode: "full-access",
       branch: null,
       worktreePath: null,
+      pullRequests: [],
       createdAt: now,
       updatedAt: now,
       archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
       latestTurn: null,
       messages: [],
       session: null,
@@ -80,16 +78,19 @@ const readModel: OrchestrationReadModel = {
       projectId: ProjectId.make("project-b"),
       title: "Thread B",
       modelSelection: {
-        provider: "codex",
+        instanceId: ProviderInstanceId.make("codex"),
         model: "gpt-5-codex",
       },
       interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
       runtimeMode: "full-access",
       branch: null,
       worktreePath: null,
+      pullRequests: [],
       createdAt: now,
       updatedAt: now,
       archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
       latestTurn: null,
       messages: [],
       session: null,
@@ -117,9 +118,7 @@ const messageSendCommand: OrchestrationCommand = {
 };
 
 describe("commandInvariants", () => {
-  it("finds threads by id and project", () => {
-    expect(findThreadById(readModel, ThreadId.make("thread-1"))?.projectId).toBe("project-a");
-    expect(findThreadById(readModel, ThreadId.make("missing"))).toBeUndefined();
+  it("lists threads by project", () => {
     expect(
       listThreadsByProjectId(readModel, ProjectId.make("project-b")).map((thread) => thread.id),
     ).toEqual([ThreadId.make("thread-2")]);
@@ -157,7 +156,7 @@ describe("commandInvariants", () => {
           projectId: ProjectId.make("project-a"),
           title: "new",
           modelSelection: {
-            provider: "codex",
+            instanceId: ProviderInstanceId.make("codex"),
             model: "gpt-5-codex",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -181,7 +180,7 @@ describe("commandInvariants", () => {
             projectId: ProjectId.make("project-a"),
             title: "dup",
             modelSelection: {
-              provider: "codex",
+              instanceId: ProviderInstanceId.make("codex"),
               model: "gpt-5-codex",
             },
             interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -196,23 +195,33 @@ describe("commandInvariants", () => {
     ).rejects.toThrow("already exists");
   });
 
-  it("requires non-negative integers", async () => {
-    await Effect.runPromise(
-      requireNonNegativeInteger({
-        commandType: "thread.checkpoint.revert",
-        field: "turnCount",
-        value: 0,
-      }),
-    );
+  it("lets a draft retry re-create a thread id after its first attempt was deleted", async () => {
+    const threadId = ThreadId.make("thread-1");
+    const firstAttempt = readModel.threads.find((thread) => thread.id === threadId)!;
+    const afterRollback: OrchestrationReadModel = {
+      ...readModel,
+      threads: readModel.threads.map((thread) =>
+        thread.id === threadId ? { ...thread, deletedAt: now, updatedAt: now } : thread,
+      ),
+    };
+    const retry: OrchestrationCommand = {
+      type: "thread.create",
+      commandId: CommandId.make("cmd-retry"),
+      threadId,
+      projectId: firstAttempt.projectId,
+      title: firstAttempt.title,
+      modelSelection: firstAttempt.modelSelection,
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      branch: null,
+      worktreePath: null,
+      createdAt: now,
+    };
 
     await expect(
       Effect.runPromise(
-        requireNonNegativeInteger({
-          commandType: "thread.checkpoint.revert",
-          field: "turnCount",
-          value: -1,
-        }),
+        requireThreadAbsent({ readModel: afterRollback, command: retry, threadId }),
       ),
-    ).rejects.toThrow("greater than or equal to 0");
+    ).resolves.toBeUndefined();
   });
 });

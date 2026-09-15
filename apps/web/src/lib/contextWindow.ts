@@ -36,7 +36,7 @@ export function deriveLatestContextWindowSnapshot(
 
     const payload = asRecord(activity.payload);
     const usedTokens = asFiniteNumber(payload?.usedTokens);
-    if (usedTokens === null || usedTokens <= 0) {
+    if (usedTokens === null || usedTokens < 0) {
       continue;
     }
 
@@ -66,6 +66,7 @@ export function deriveLatestContextWindowSnapshot(
       toolUses: asFiniteNumber(payload?.toolUses),
       durationMs: asFiniteNumber(payload?.durationMs),
       compactsAutomatically: asBoolean(payload?.compactsAutomatically) ?? false,
+      autoCompactThreshold: asFiniteNumber(payload?.autoCompactThreshold),
       updatedAt: activity.createdAt,
     };
   }

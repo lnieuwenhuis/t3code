@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import { formatWorkspaceRelativePath } from "./filePathDisplay";
 
@@ -37,5 +37,11 @@ describe("formatWorkspaceRelativePath", () => {
         "C:/Users/mike/dev-stuff/t3code",
       ),
     ).toBe("t3code/apps/web/src/session-logic.ts:501:9");
+  });
+
+  it("keeps double-slash POSIX paths case-sensitive", () => {
+    expect(formatWorkspaceRelativePath("//tmp/project/probe.txt", "//tmp/Project")).toBe(
+      "//tmp/project/probe.txt",
+    );
   });
 });

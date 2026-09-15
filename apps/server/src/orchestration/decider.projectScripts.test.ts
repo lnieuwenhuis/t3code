@@ -5,9 +5,13 @@ import {
   MessageId,
   ProjectId,
   ThreadId,
+  ProviderInstanceId,
+  type ProjectScript,
 } from "@t3tools/contracts";
-import { describe, expect, it } from "vitest";
-import { Effect } from "effect";
+import { createModelSelection } from "@t3tools/shared/model";
+import { expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import { decideOrchestrationCommand } from "./decider.ts";
 import { createEmptyReadModel, projectEvent } from "./projector.ts";
@@ -15,14 +19,13 @@ import { createEmptyReadModel, projectEvent } from "./projector.ts";
 const asEventId = (value: string): EventId => EventId.make(value);
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asMessageId = (value: string): MessageId => MessageId.make(value);
+it.layer(NodeServices.layer)("decider project scripts", (it) => {
+  it.effect("emits empty scripts on project.create", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const readModel = createEmptyReadModel(now);
 
-describe("decider project scripts", () => {
-  it("emits empty scripts on project.create", async () => {
-    const now = new Date().toISOString();
-    const readModel = createEmptyReadModel(now);
-
-    const result = await Effect.runPromise(
-      decideOrchestrationCommand({
+      const result = yield* decideOrchestrationCommand({
         command: {
           type: "project.create",
           commandId: CommandId.make("cmd-project-create-scripts"),
@@ -32,19 +35,19 @@ describe("decider project scripts", () => {
           createdAt: now,
         },
         readModel,
-      }),
-    );
+      });
 
-    const event = Array.isArray(result) ? result[0] : result;
-    expect(event.type).toBe("project.created");
-    expect((event.payload as { scripts: unknown[] }).scripts).toEqual([]);
-  });
+      const event = Array.isArray(result) ? result[0] : result;
+      expect(event.type).toBe("project.created");
+      expect((event.payload as { scripts: unknown[] }).scripts).toEqual([]);
+    }),
+  );
 
-  it("propagates scripts in project.meta.update payload", async () => {
-    const now = new Date().toISOString();
-    const initial = createEmptyReadModel(now);
-    const readModel = await Effect.runPromise(
-      projectEvent(initial, {
+  it.effect("propagates scripts in project.meta.update payload", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const initial = createEmptyReadModel(now);
+      const readModel = yield* projectEvent(initial, {
         sequence: 1,
         eventId: asEventId("evt-project-create-scripts"),
         aggregateKind: "project",
@@ -64,21 +67,19 @@ describe("decider project scripts", () => {
           createdAt: now,
           updatedAt: now,
         },
-      }),
-    );
+      });
 
-    const scripts = [
-      {
-        id: "lint",
-        name: "Lint",
-        command: "bun run lint",
-        icon: "lint",
-        runOnWorktreeCreate: false,
-      },
-    ] as const;
+      const scripts = [
+        {
+          id: "lint",
+          name: "Lint",
+          command: "bun run lint",
+          icon: "lint",
+          runOnWorktreeCreate: false,
+        },
+      ] as const;
 
-    const result = await Effect.runPromise(
-      decideOrchestrationCommand({
+      const result = yield* decideOrchestrationCommand({
         command: {
           type: "project.meta.update",
           commandId: CommandId.make("cmd-project-update-scripts"),
@@ -86,19 +87,286 @@ describe("decider project scripts", () => {
           scripts: Array.from(scripts),
         },
         readModel,
-      }),
-    );
+      });
 
-    const event = Array.isArray(result) ? result[0] : result;
-    expect(event.type).toBe("project.meta-updated");
-    expect((event.payload as { scripts?: unknown[] }).scripts).toEqual(scripts);
+      const event = Array.isArray(result) ? result[0] : result;
+      expect(event.type).toBe("project.meta-updated");
+      expect((event.payload as { scripts?: unknown[] }).scripts).toEqual(scripts);
+    }),
+  );
+
+  const script = (id: string): ProjectScript => ({
+    id,
+    name: "Install dependencies",
+    command: "vp i",
+    icon: "configure",
+    runOnWorktreeCreate: false,
   });
 
-  it("emits user message and turn-start-requested events for thread.turn.start", async () => {
-    const now = new Date().toISOString();
-    const initial = createEmptyReadModel(now);
-    const withProject = await Effect.runPromise(
-      projectEvent(initial, {
+  const projectWithScripts = (scripts: ReadonlyArray<ProjectScript>) => {
+    const now = "2026-01-01T00:00:00.000Z";
+    return projectEvent(createEmptyReadModel(now), {
+      sequence: 1,
+      eventId: asEventId("evt-legacy-scripts"),
+      aggregateKind: "project",
+      aggregateId: asProjectId("project-scripts"),
+      type: "project.created",
+      occurredAt: now,
+      commandId: CommandId.make("cmd-legacy-scripts"),
+      causationEventId: null,
+      correlationId: CommandId.make("cmd-legacy-scripts"),
+      metadata: {},
+      payload: {
+        projectId: asProjectId("project-scripts"),
+        title: "Scripts",
+        workspaceRoot: "/tmp/scripts",
+        defaultModelSelection: null,
+        scripts,
+        createdAt: now,
+        updatedAt: now,
+      },
+    });
+  };
+
+  for (const id of ["install-javascript-dependencies", "A", "a.b", "a b", "-a", "a".repeat(25)]) {
+    it.effect(`rejects a new script ID that cannot have a shortcut: ${id}`, () =>
+      Effect.gen(function* () {
+        const readModel = yield* projectWithScripts([]);
+        const failure = yield* Effect.flip(
+          decideOrchestrationCommand({
+            readModel,
+            command: {
+              type: "project.meta.update",
+              commandId: CommandId.make("cmd-invalid-script"),
+              projectId: asProjectId("project-scripts"),
+              scripts: [script("lint"), script(id)],
+            },
+          }),
+        );
+        expect(failure).toMatchObject({ _tag: "OrchestrationCommandInvariantError" });
+        expect(failure.message).toContain("Script ID");
+        expect(failure.message).toContain("24");
+        expect(readModel.projects[0]?.scripts).toEqual([]);
+      }),
+    );
+  }
+
+  it.effect("accepts a script ID at the shortcut length limit", () =>
+    Effect.gen(function* () {
+      const readModel = yield* projectWithScripts([]);
+      const scripts = [script("a".repeat(24))];
+      const result = yield* decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "project.meta.update",
+          commandId: CommandId.make("cmd-valid-script"),
+          projectId: asProjectId("project-scripts"),
+          scripts,
+        },
+      });
+      const event = Array.isArray(result) ? result[0] : result;
+      expect(event.payload).toMatchObject({ scripts });
+    }),
+  );
+
+  it.effect(
+    "keeps legacy scripts readable, editable and removable while allowing valid additions",
+    () =>
+      Effect.gen(function* () {
+        const legacy = script("install-javascript-dependencies");
+        const readModel = yield* projectWithScripts([legacy]);
+        expect(readModel.projects[0]?.scripts).toEqual([legacy]);
+        for (const scripts of [[{ ...legacy, command: "vp install" }, script("lint")], []]) {
+          const result = yield* decideOrchestrationCommand({
+            readModel,
+            command: {
+              type: "project.meta.update",
+              commandId: CommandId.make("cmd-repair-script"),
+              projectId: asProjectId("project-scripts"),
+              scripts,
+            },
+          });
+          const event = Array.isArray(result) ? result[0] : result;
+          expect(event.payload).toMatchObject({ scripts });
+        }
+        const failure = yield* Effect.flip(
+          decideOrchestrationCommand({
+            readModel,
+            command: {
+              type: "project.meta.update",
+              commandId: CommandId.make("cmd-new-invalid-script"),
+              projectId: asProjectId("project-scripts"),
+              scripts: [legacy, script("another.invalid.id")],
+            },
+          }),
+        );
+        expect(failure).toMatchObject({ _tag: "OrchestrationCommandInvariantError" });
+      }),
+  );
+
+  it.effect("propagates project icon metadata in project.meta.update", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const readModel = yield* projectEvent(createEmptyReadModel(now), {
+        sequence: 1,
+        eventId: asEventId("evt-project-create-favicon"),
+        aggregateKind: "project",
+        aggregateId: asProjectId("project-favicon"),
+        type: "project.created",
+        occurredAt: now,
+        commandId: CommandId.make("cmd-project-create-favicon"),
+        causationEventId: null,
+        correlationId: CommandId.make("cmd-project-create-favicon"),
+        metadata: {},
+        payload: {
+          projectId: asProjectId("project-favicon"),
+          title: "Favicon",
+          workspaceRoot: "/tmp/favicon",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "project.meta.update",
+          commandId: CommandId.make("cmd-project-update-favicon"),
+          projectId: asProjectId("project-favicon"),
+          faviconPath: "brand/icon.svg",
+          projectIcon: { kind: "lucide", name: "alarm-clock", color: "violet" },
+        },
+        readModel,
+      });
+
+      const event = Array.isArray(result) ? result[0] : result;
+      expect(event.type).toBe("project.meta-updated");
+      expect((event.payload as { faviconPath?: string }).faviconPath).toBe("brand/icon.svg");
+      expect((event.payload as { projectIcon?: unknown }).projectIcon).toEqual({
+        kind: "lucide",
+        name: "alarm-clock",
+        color: "violet",
+      });
+    }),
+  );
+
+  it.effect("rejects project.create for an active workspace root that already exists", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const initial = createEmptyReadModel(now);
+      const readModel = yield* projectEvent(initial, {
+        sequence: 1,
+        eventId: asEventId("evt-project-create"),
+        aggregateKind: "project",
+        aggregateId: asProjectId("project-existing"),
+        type: "project.created",
+        occurredAt: now,
+        commandId: CommandId.make("cmd-project-create"),
+        causationEventId: null,
+        correlationId: CommandId.make("cmd-project-create"),
+        metadata: {},
+        payload: {
+          projectId: asProjectId("project-existing"),
+          title: "Project",
+          workspaceRoot: "/tmp/project",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      const failure = yield* Effect.flip(
+        decideOrchestrationCommand({
+          command: {
+            type: "project.create",
+            commandId: CommandId.make("cmd-project-create-duplicate-root"),
+            projectId: asProjectId("project-duplicate-root"),
+            title: "Duplicate Project",
+            workspaceRoot: "/tmp/project/",
+            createdAt: now,
+          },
+          readModel,
+        }),
+      );
+
+      expect(failure.message).toContain(
+        "Active project 'project-existing' already exists for workspace root '/tmp/project'.",
+      );
+    }),
+  );
+
+  it.effect("rejects project.meta.update when moving onto another active workspace root", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const initial = createEmptyReadModel(now);
+      const withFirstProject = yield* projectEvent(initial, {
+        sequence: 1,
+        eventId: asEventId("evt-project-create-first"),
+        aggregateKind: "project",
+        aggregateId: asProjectId("project-first"),
+        type: "project.created",
+        occurredAt: now,
+        commandId: CommandId.make("cmd-project-create-first"),
+        causationEventId: null,
+        correlationId: CommandId.make("cmd-project-create-first"),
+        metadata: {},
+        payload: {
+          projectId: asProjectId("project-first"),
+          title: "First",
+          workspaceRoot: "/tmp/project-first",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+      const readModel = yield* projectEvent(withFirstProject, {
+        sequence: 2,
+        eventId: asEventId("evt-project-create-second"),
+        aggregateKind: "project",
+        aggregateId: asProjectId("project-second"),
+        type: "project.created",
+        occurredAt: now,
+        commandId: CommandId.make("cmd-project-create-second"),
+        causationEventId: null,
+        correlationId: CommandId.make("cmd-project-create-second"),
+        metadata: {},
+        payload: {
+          projectId: asProjectId("project-second"),
+          title: "Second",
+          workspaceRoot: "/tmp/project-second",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      const failure = yield* Effect.flip(
+        decideOrchestrationCommand({
+          command: {
+            type: "project.meta.update",
+            commandId: CommandId.make("cmd-project-update-duplicate-root"),
+            projectId: asProjectId("project-second"),
+            workspaceRoot: "/tmp/project-first",
+          },
+          readModel,
+        }),
+      );
+
+      expect(failure.message).toContain(
+        "Active project 'project-first' already exists for workspace root '/tmp/project-first'.",
+      );
+    }),
+  );
+
+  it.effect("emits user message and turn-start-requested events for thread.turn.start", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const initial = createEmptyReadModel(now);
+      const withProject = yield* projectEvent(initial, {
         sequence: 1,
         eventId: asEventId("evt-project-create"),
         aggregateKind: "project",
@@ -118,10 +386,8 @@ describe("decider project scripts", () => {
           createdAt: now,
           updatedAt: now,
         },
-      }),
-    );
-    const readModel = await Effect.runPromise(
-      projectEvent(withProject, {
+      });
+      const readModel = yield* projectEvent(withProject, {
         sequence: 2,
         eventId: asEventId("evt-thread-create"),
         aggregateKind: "thread",
@@ -137,7 +403,7 @@ describe("decider project scripts", () => {
           projectId: asProjectId("project-1"),
           title: "Thread",
           modelSelection: {
-            provider: "codex",
+            instanceId: ProviderInstanceId.make("codex"),
             model: "gpt-5-codex",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -147,11 +413,9 @@ describe("decider project scripts", () => {
           createdAt: now,
           updatedAt: now,
         },
-      }),
-    );
+      });
 
-    const result = await Effect.runPromise(
-      decideOrchestrationCommand({
+      const result = yield* decideOrchestrationCommand({
         command: {
           type: "thread.turn.start",
           commandId: CommandId.make("cmd-turn-start"),
@@ -162,52 +426,44 @@ describe("decider project scripts", () => {
             text: "hello",
             attachments: [],
           },
-          modelSelection: {
-            provider: "codex",
-            model: "gpt-5.3-codex",
-            options: {
-              reasoningEffort: "high",
-              fastMode: true,
-            },
-          },
+          modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.3-codex", [
+            { id: "reasoningEffort", value: "high" },
+            { id: "fastMode", value: true },
+          ]),
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",
           createdAt: now,
         },
         readModel,
-      }),
-    );
+      });
 
-    expect(Array.isArray(result)).toBe(true);
-    const events = Array.isArray(result) ? result : [result];
-    expect(events).toHaveLength(2);
-    expect(events[0]?.type).toBe("thread.message-sent");
-    const turnStartEvent = events[1];
-    expect(turnStartEvent?.type).toBe("thread.turn-start-requested");
-    expect(turnStartEvent?.causationEventId).toBe(events[0]?.eventId ?? null);
-    if (turnStartEvent?.type !== "thread.turn-start-requested") {
-      return;
-    }
-    expect(turnStartEvent.payload).toMatchObject({
-      threadId: ThreadId.make("thread-1"),
-      messageId: asMessageId("message-user-1"),
-      modelSelection: {
-        provider: "codex",
-        model: "gpt-5.3-codex",
-        options: {
-          reasoningEffort: "high",
-          fastMode: true,
-        },
-      },
-      runtimeMode: "approval-required",
-    });
-  });
+      expect(Array.isArray(result)).toBe(true);
+      const events = Array.isArray(result) ? result : [result];
+      expect(events).toHaveLength(2);
+      expect(events[0]?.type).toBe("thread.message-sent");
+      const turnStartEvent = events[1];
+      expect(turnStartEvent?.type).toBe("thread.turn-start-requested");
+      expect(turnStartEvent?.causationEventId).toBe(events[0]?.eventId ?? null);
+      if (turnStartEvent?.type !== "thread.turn-start-requested") {
+        return;
+      }
+      expect(turnStartEvent.payload).toMatchObject({
+        threadId: ThreadId.make("thread-1"),
+        messageId: asMessageId("message-user-1"),
+        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.3-codex", [
+          { id: "reasoningEffort", value: "high" },
+          { id: "fastMode", value: true },
+        ]),
+        runtimeMode: "approval-required",
+      });
+    }),
+  );
 
-  it("emits thread.runtime-mode-set from thread.runtime-mode.set", async () => {
-    const now = new Date().toISOString();
-    const initial = createEmptyReadModel(now);
-    const withProject = await Effect.runPromise(
-      projectEvent(initial, {
+  it.effect("emits thread.runtime-mode-set from thread.runtime-mode.set", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const initial = createEmptyReadModel(now);
+      const withProject = yield* projectEvent(initial, {
         sequence: 1,
         eventId: asEventId("evt-project-create"),
         aggregateKind: "project",
@@ -227,10 +483,8 @@ describe("decider project scripts", () => {
           createdAt: now,
           updatedAt: now,
         },
-      }),
-    );
-    const readModel = await Effect.runPromise(
-      projectEvent(withProject, {
+      });
+      const readModel = yield* projectEvent(withProject, {
         sequence: 2,
         eventId: asEventId("evt-thread-create"),
         aggregateKind: "thread",
@@ -246,7 +500,7 @@ describe("decider project scripts", () => {
           projectId: asProjectId("project-1"),
           title: "Thread",
           modelSelection: {
-            provider: "codex",
+            instanceId: ProviderInstanceId.make("codex"),
             model: "gpt-5-codex",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -256,11 +510,9 @@ describe("decider project scripts", () => {
           createdAt: now,
           updatedAt: now,
         },
-      }),
-    );
+      });
 
-    const result = await Effect.runPromise(
-      decideOrchestrationCommand({
+      const result = yield* decideOrchestrationCommand({
         command: {
           type: "thread.runtime-mode.set",
           commandId: CommandId.make("cmd-runtime-mode-set"),
@@ -269,27 +521,27 @@ describe("decider project scripts", () => {
           createdAt: now,
         },
         readModel,
-      }),
-    );
+      });
 
-    const singleResult = Array.isArray(result) ? null : result;
-    if (singleResult === null) {
-      throw new Error("Expected a single runtime-mode-set event.");
-    }
-    expect(singleResult).toMatchObject({
-      type: "thread.runtime-mode-set",
-      payload: {
-        threadId: ThreadId.make("thread-1"),
-        runtimeMode: "approval-required",
-      },
-    });
-  });
+      const singleResult = Array.isArray(result) ? null : result;
+      if (singleResult === null) {
+        throw new Error("Expected a single runtime-mode-set event.");
+      }
+      expect(singleResult).toMatchObject({
+        type: "thread.runtime-mode-set",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          runtimeMode: "approval-required",
+        },
+      });
+    }),
+  );
 
-  it("emits thread.interaction-mode-set from thread.interaction-mode.set", async () => {
-    const now = new Date().toISOString();
-    const initial = createEmptyReadModel(now);
-    const withProject = await Effect.runPromise(
-      projectEvent(initial, {
+  it.effect("emits thread.interaction-mode-set from thread.interaction-mode.set", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const initial = createEmptyReadModel(now);
+      const withProject = yield* projectEvent(initial, {
         sequence: 1,
         eventId: asEventId("evt-project-create"),
         aggregateKind: "project",
@@ -309,10 +561,8 @@ describe("decider project scripts", () => {
           createdAt: now,
           updatedAt: now,
         },
-      }),
-    );
-    const readModel = await Effect.runPromise(
-      projectEvent(withProject, {
+      });
+      const readModel = yield* projectEvent(withProject, {
         sequence: 2,
         eventId: asEventId("evt-thread-create"),
         aggregateKind: "thread",
@@ -328,7 +578,7 @@ describe("decider project scripts", () => {
           projectId: asProjectId("project-1"),
           title: "Thread",
           modelSelection: {
-            provider: "codex",
+            instanceId: ProviderInstanceId.make("codex"),
             model: "gpt-5-codex",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -338,11 +588,9 @@ describe("decider project scripts", () => {
           createdAt: now,
           updatedAt: now,
         },
-      }),
-    );
+      });
 
-    const result = await Effect.runPromise(
-      decideOrchestrationCommand({
+      const result = yield* decideOrchestrationCommand({
         command: {
           type: "thread.interaction-mode.set",
           commandId: CommandId.make("cmd-interaction-mode-set"),
@@ -351,19 +599,19 @@ describe("decider project scripts", () => {
           createdAt: now,
         },
         readModel,
-      }),
-    );
+      });
 
-    const singleResult = Array.isArray(result) ? null : result;
-    if (singleResult === null) {
-      throw new Error("Expected a single interaction-mode-set event.");
-    }
-    expect(singleResult).toMatchObject({
-      type: "thread.interaction-mode-set",
-      payload: {
-        threadId: ThreadId.make("thread-1"),
-        interactionMode: "plan",
-      },
-    });
-  });
+      const singleResult = Array.isArray(result) ? null : result;
+      if (singleResult === null) {
+        throw new Error("Expected a single interaction-mode-set event.");
+      }
+      expect(singleResult).toMatchObject({
+        type: "thread.interaction-mode-set",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          interactionMode: "plan",
+        },
+      });
+    }),
+  );
 });

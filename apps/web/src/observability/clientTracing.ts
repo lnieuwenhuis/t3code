@@ -1,8 +1,15 @@
-import { Exit, Layer, ManagedRuntime, Scope, Tracer } from "effect";
-import { FetchHttpClient, HttpClient } from "effect/unstable/http";
-import { OtlpSerialization, OtlpTracer } from "effect/unstable/observability";
+import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
+import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Scope from "effect/Scope";
+import * as Tracer from "effect/Tracer";
+import { HttpClient } from "effect/unstable/http";
+import { OtlpExporter, OtlpSerialization, OtlpTracer } from "effect/unstable/observability";
 
+import { settleAsyncResult, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
 import { resolvePrimaryEnvironmentHttpUrl } from "../environments/primary";
+import { primaryEnvironmentHttpLayer } from "../environments/primary/httpLayer";
 import { isElectron } from "../env";
 import { APP_VERSION } from "~/branding";
 
@@ -17,7 +24,8 @@ const CLIENT_TRACING_RESOURCE = {
 } as const;
 
 const delegateRuntimeLayer = Layer.mergeAll(
-  FetchHttpClient.layer,
+  primaryEnvironmentHttpLayer,
+  OtlpExporter.layerFlusher,
   OtlpSerialization.layerJson,
   Layer.succeed(HttpClient.TracerDisabledWhen, () => true),
 );
@@ -32,15 +40,6 @@ let pendingConfiguration = Promise.resolve();
 export interface ClientTracingConfig {
   readonly exportIntervalMs?: number;
 }
-
-export const ClientTracingLive = Layer.succeed(
-  Tracer.Tracer,
-  Tracer.make({
-    span(options) {
-      return activeDelegate?.span(options) ?? new Tracer.NativeSpan(options);
-    },
-  }),
-);
 
 export function configureClientTracing(config: ClientTracingConfig = {}): Promise<void> {
   if (config.exportIntervalMs === undefined && activeConfigKey !== null) {
@@ -74,8 +73,8 @@ async function applyClientTracingConfig(config: ClientTracingConfig): Promise<vo
   const runtime = ManagedRuntime.make(delegateRuntimeLayer);
   const scope = runtime.runSync(Scope.make());
 
-  try {
-    const delegate = await runtime.runPromise(
+  const delegateResult = await settleAsyncResult(() =>
+    runtime.runPromiseExit(
       Scope.provide(scope)(
         OtlpTracer.make({
           url: otlpTracesUrl,
@@ -83,26 +82,33 @@ async function applyClientTracingConfig(config: ClientTracingConfig): Promise<vo
           resource: CLIENT_TRACING_RESOURCE,
         }),
       ),
-    );
-
-    if (generation !== configurationGeneration) {
-      await disposeTracerRuntime(runtime, scope);
-      return;
-    }
-
-    activeDelegate = delegate;
-    activeRuntime = runtime;
-    activeScope = scope;
-  } catch (error) {
+    ),
+  );
+  if (delegateResult._tag === "Failure") {
     await disposeTracerRuntime(runtime, scope);
 
     if (generation === configurationGeneration) {
+      const error = squashAtomCommandFailure(delegateResult);
+      const tracesUrl = new URL(otlpTracesUrl);
       console.warn("Failed to configure client tracing exporter", {
-        error: formatError(error),
-        otlpTracesUrl,
+        scheme: tracesUrl.protocol.replace(/:$/, ""),
+        host: tracesUrl.hostname,
+        port: tracesUrl.port || undefined,
+        exportIntervalMs,
+        ...safeErrorLogAttributes(error),
       });
     }
+    return;
   }
+
+  if (generation !== configurationGeneration) {
+    await disposeTracerRuntime(runtime, scope);
+    return;
+  }
+
+  activeDelegate = delegateResult.value;
+  activeRuntime = runtime;
+  activeScope = scope;
 }
 
 async function disposeTracerRuntime(
@@ -113,32 +119,6 @@ async function disposeTracerRuntime(
     return;
   }
 
-  await runtime
-    .runPromise(Scope.close(scope, Exit.void))
-    .catch(() => undefined)
-    .finally(() => {
-      runtime.dispose();
-    });
-}
-
-function formatError(error: unknown): string {
-  if (error instanceof Error && error.message.trim().length > 0) {
-    return error.message;
-  }
-
-  return String(error);
-}
-
-export async function __resetClientTracingForTests() {
-  configurationGeneration++;
-  activeConfigKey = null;
-  activeDelegate = null;
-  pendingConfiguration = Promise.resolve();
-
-  const runtime = activeRuntime;
-  const scope = activeScope;
-  activeRuntime = null;
-  activeScope = null;
-
-  await disposeTracerRuntime(runtime, scope);
+  await settleAsyncResult(() => runtime.runPromiseExit(Scope.close(scope, Exit.void)));
+  runtime.dispose();
 }

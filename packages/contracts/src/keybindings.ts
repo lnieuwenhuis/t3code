@@ -1,5 +1,5 @@
-import { Schema } from "effect";
-import { TrimmedString } from "./baseSchemas.ts";
+import * as Schema from "effect/Schema";
+import { ForwardCompatibleArray, TrimmedString } from "./baseSchemas.ts";
 
 export const MAX_KEYBINDING_VALUE_LENGTH = 64;
 const MAX_KEYBINDING_WHEN_LENGTH = 256;
@@ -20,23 +20,72 @@ export const THREAD_JUMP_KEYBINDING_COMMANDS = [
 ] as const;
 export type ThreadJumpKeybindingCommand = (typeof THREAD_JUMP_KEYBINDING_COMMANDS)[number];
 
-export const THREAD_KEYBINDING_COMMANDS = [
+export const MODEL_PICKER_JUMP_KEYBINDING_COMMANDS = [
+  "modelPicker.jump.1",
+  "modelPicker.jump.2",
+  "modelPicker.jump.3",
+  "modelPicker.jump.4",
+  "modelPicker.jump.5",
+  "modelPicker.jump.6",
+  "modelPicker.jump.7",
+  "modelPicker.jump.8",
+  "modelPicker.jump.9",
+] as const;
+export type ModelPickerJumpKeybindingCommand =
+  (typeof MODEL_PICKER_JUMP_KEYBINDING_COMMANDS)[number];
+
+const THREAD_KEYBINDING_COMMANDS = [
+  "thread.stop",
   "thread.previous",
   "thread.next",
+  "thread.copyReference",
+  "thread.settle",
+  "thread.pin",
   ...THREAD_JUMP_KEYBINDING_COMMANDS,
 ] as const;
 export type ThreadKeybindingCommand = (typeof THREAD_KEYBINDING_COMMANDS)[number];
 
-const STATIC_KEYBINDING_COMMANDS = [
+const MODEL_PICKER_KEYBINDING_COMMANDS = [
+  "modelPicker.toggle",
+  "modelPicker.previousProvider",
+  "modelPicker.nextProvider",
+  ...MODEL_PICKER_JUMP_KEYBINDING_COMMANDS,
+] as const;
+export type ModelPickerKeybindingCommand = (typeof MODEL_PICKER_KEYBINDING_COMMANDS)[number];
+
+export const STATIC_KEYBINDING_COMMANDS = [
+  "sidebar.toggle",
   "terminal.toggle",
   "terminal.split",
+  "terminal.splitVertical",
   "terminal.new",
   "terminal.close",
+  "rightPanel.toggle",
+  "rightPanel.toggleMaximized",
+  "rightPanel.close",
+  "pullRequest.copyNumber",
   "diff.toggle",
+  "preview.toggle",
+  "preview.refresh",
+  "preview.focusUrl",
+  "preview.zoomIn",
+  "preview.zoomOut",
+  "preview.resetZoom",
   "commandPalette.toggle",
+  "filePicker.toggle",
+  "projectSearch.toggle",
+  "themeEditor.toggle",
+  "composer.stash",
+  "composer.host",
+  "composer.effort",
+  "composer.mode",
+  "composer.workspace",
+  "composer.previousWorktree",
+  "composer.branch",
   "chat.new",
   "chat.newLocal",
   "editor.openFavorite",
+  ...MODEL_PICKER_KEYBINDING_COMMANDS,
   ...THREAD_KEYBINDING_COMMANDS,
 ] as const;
 
@@ -55,12 +104,12 @@ export const KeybindingCommand = Schema.Union([
 ]);
 export type KeybindingCommand = typeof KeybindingCommand.Type;
 
-const KeybindingValue = TrimmedString.check(
+export const KeybindingValue = TrimmedString.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(MAX_KEYBINDING_VALUE_LENGTH),
 );
 
-const KeybindingWhen = TrimmedString.check(
+export const KeybindingWhen = TrimmedString.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(MAX_KEYBINDING_WHEN_LENGTH),
 );
@@ -122,17 +171,24 @@ export const ResolvedKeybindingRule = Schema.Struct({
 }).annotate({ parseOptions: { onExcessProperty: "ignore" } });
 export type ResolvedKeybindingRule = typeof ResolvedKeybindingRule.Type;
 
-export const ResolvedKeybindingsConfig = Schema.Array(ResolvedKeybindingRule).check(
+/**
+ * The command set grows over time, so a client may receive rules it cannot
+ * represent (a command or `when` node added after that client shipped).
+ * Decoding drops those rules instead of failing the whole payload —
+ * rejecting the config would take down the connection over a shortcut the
+ * client couldn't dispatch anyway.
+ */
+export const ResolvedKeybindingsConfig = ForwardCompatibleArray(ResolvedKeybindingRule).check(
   Schema.isMaxLength(MAX_KEYBINDINGS_COUNT),
 );
 export type ResolvedKeybindingsConfig = typeof ResolvedKeybindingsConfig.Type;
 
-export class KeybindingsConfigError extends Schema.TaggedErrorClass<KeybindingsConfigError>()(
+export class KeybindingsConfigError extends Schema.TaggedError<KeybindingsConfigError>()(
   "KeybindingsConfigParseError",
   {
     configPath: Schema.String,
     detail: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {

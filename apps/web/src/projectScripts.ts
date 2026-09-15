@@ -4,7 +4,35 @@ import {
   type KeybindingCommand,
   type ProjectScript,
 } from "@t3tools/contracts";
-import { Schema } from "effect";
+import * as Schema from "effect/Schema";
+const isScriptRunCommand = Schema.is(SCRIPT_RUN_COMMAND_PATTERN);
+
+export interface ProjectScriptInput {
+  readonly name: ProjectScript["name"];
+  readonly command: ProjectScript["command"];
+  readonly icon: ProjectScript["icon"];
+  readonly runOnWorktreeCreate: ProjectScript["runOnWorktreeCreate"];
+  readonly waitForSetup: boolean;
+  readonly previewUrl: Exclude<ProjectScript["previewUrl"], undefined> | null;
+  readonly autoOpenPreview: boolean;
+}
+
+export function buildProjectScript(id: string, input: ProjectScriptInput): ProjectScript {
+  return {
+    id,
+    name: input.name,
+    command: input.command,
+    icon: input.icon,
+    runOnWorktreeCreate: input.runOnWorktreeCreate,
+    ...(input.runOnWorktreeCreate && input.waitForSetup ? { async: false } : {}),
+    ...(input.previewUrl === null
+      ? {}
+      : {
+          previewUrl: input.previewUrl,
+          autoOpenPreview: input.autoOpenPreview,
+        }),
+  };
+}
 
 function normalizeScriptId(value: string): string {
   const cleaned = value
@@ -21,12 +49,15 @@ function normalizeScriptId(value: string): string {
   return cleaned.slice(0, MAX_SCRIPT_ID_LENGTH).replace(/-+$/g, "") || "script";
 }
 
-export const commandForProjectScript = (scriptId: string): KeybindingCommand =>
-  SCRIPT_RUN_COMMAND_PATTERN.make(`script.${scriptId}.run`);
+/** Legacy script IDs may not support shortcuts; keep those scripts usable without one. */
+export function commandForProjectScript(scriptId: string): KeybindingCommand | null {
+  const command = `script.${scriptId}.run`;
+  return isScriptRunCommand(command) ? command : null;
+}
 
 export function projectScriptIdFromCommand(command: string): string | null {
   const trimmed = command.trim();
-  if (!Schema.is(SCRIPT_RUN_COMMAND_PATTERN)(trimmed)) {
+  if (!isScriptRunCommand(trimmed)) {
     return null;
   }
   const [prefix, , suffix] = SCRIPT_RUN_COMMAND_PATTERN.parts;
@@ -55,7 +86,7 @@ export function nextProjectScriptId(name: string, existingIds: Iterable<string>)
   return `${baseId}-${Date.now()}`.slice(0, MAX_SCRIPT_ID_LENGTH);
 }
 
-export function primaryProjectScript(scripts: ProjectScript[]): ProjectScript | null {
+export function primaryProjectScript(scripts: ReadonlyArray<ProjectScript>): ProjectScript | null {
   const regular = scripts.find((script) => !script.runOnWorktreeCreate);
   return regular ?? scripts[0] ?? null;
 }
