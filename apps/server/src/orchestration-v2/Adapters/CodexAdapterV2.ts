@@ -1059,6 +1059,26 @@ type CodexCollabAgentToolCallItem = Extract<
   { readonly type: "collabAgentToolCall" }
 >;
 
+function codexSubagentStatus(
+  status: CodexCollabAgentToolCallItem["agentsStates"][string]["status"],
+): OrchestrationV2Subagent["status"] {
+  switch (status) {
+    case "pendingInit":
+      return "pending";
+    case "running":
+      return "running";
+    case "interrupted":
+      return "interrupted";
+    case "completed":
+      return "completed";
+    case "errored":
+    case "notFound":
+      return "failed";
+    case "shutdown":
+      return "cancelled";
+  }
+}
+
 type CodexSubAgentActivityItem = Extract<
   | CodexSchema.V2ItemStartedNotification__ThreadItem
   | CodexSchema.V2ItemCompletedNotification__ThreadItem,
@@ -2650,18 +2670,9 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               if (subagent === undefined) {
                 continue;
               }
-              const nativeStatus = String(state.status);
-              const status: OrchestrationV2Subagent["status"] =
-                nativeStatus === "completed"
-                  ? "completed"
-                  : nativeStatus === "failed" || nativeStatus === "errored"
-                    ? "failed"
-                    : nativeStatus === "cancelled" || nativeStatus === "closed"
-                      ? "cancelled"
-                      : "running";
               yield* emitSubagentTaskUpdate({
                 subagent,
-                status,
+                status: codexSubagentStatus(state.status),
                 ...(state.message === null ? {} : { result: state.message }),
               });
             }
