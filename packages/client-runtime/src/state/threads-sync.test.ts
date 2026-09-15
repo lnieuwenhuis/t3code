@@ -161,9 +161,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   const supervisorState = yield* SubscriptionRef.make<SupervisorConnectionState>(
     AVAILABLE_CONNECTION_STATE,
   );
-  // Delivers each offered batch as one chunk so tests can deterministically
-  // exercise the adaptive batching downstream of Stream.buffer; an offered
-  // Error fails the stream at its position in the batch.
+  // Preserve queued event batches while failing at the first error.
   const streamFrom = (queue: Queue.Queue<TestThreadInput>) =>
     Stream.fromQueue(queue).pipe(
       Stream.chunks,
@@ -1145,9 +1143,10 @@ describe("EnvironmentThreads", () => {
     () =>
       Effect.gen(function* () {
         const harness = yield* makeHarness({ cached: ACTIVE_THREAD });
-        yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
+        yield* awaitThreadState(harness.observed, (value) => value.status === "live");
+        const before = yield* Ref.get(harness.stateChangeCount);
 
-        // Both events arrive in one backlog batch: the session settles and the
+        // Both events arrive in one transport batch: the session settles and the
         // next turn starts before the fold publishes.
         yield* Queue.offerAll(harness.inputs, [
           sessionSet("ready", "turn-1", CACHED_SNAPSHOT_SEQUENCE + 1),
@@ -1159,6 +1158,7 @@ describe("EnvironmentThreads", () => {
             Option.isSome(value.data) &&
             value.data.value.session?.activeTurnId === TurnId.make("turn-2"),
         );
+        expect((yield* Ref.get(harness.stateChangeCount)) - before).toBe(1);
         yield* TestClock.adjust("500 millis");
         yield* Effect.yieldNow;
 
