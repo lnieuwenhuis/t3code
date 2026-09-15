@@ -18,6 +18,7 @@ import { type ProviderApprovalDecision, type ProviderEvent, ThreadId } from "@t3
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Logger from "effect/Logger";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { assert, describe } from "vite-plus/test";
@@ -233,6 +234,101 @@ describe("CodexSessionRuntime collab integration", () => {
       ]);
 
       yield* runtime.close;
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  for (const [name, first] of [
+    ["error", { error: "child unavailable" }],
+    ["timeout", { hang: true }],
+    ["incomplete", { model: "gpt-6-astra" }],
+  ] as const) {
+    it.live(`recovers child metadata after an ${name} lookup`, () =>
+      Effect.gen(function* () {
+        const script = {
+          rootThreadId: ROOT,
+          recordRequests: true,
+          notifications: [capturedStartedActivity(), capturedStartedActivity()],
+          childResumeSnapshots: {
+            [CHILD_A]: [first, { model: "gpt-6-astra", reasoningEffort: "low" }],
+          },
+        };
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        NodeFS.writeFileSync(scriptPath, JSON.stringify(script), "utf8");
+        NodeFS.rmSync(`${scriptPath}.requests`, { force: true });
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            NodeFS.rmSync(scriptPath, { force: true });
+            NodeFS.rmSync(`${scriptPath}.requests`, { force: true });
+          }),
+        );
+        const runtime = yield* makeCodexSessionRuntime({
+          threadId: ThreadId.make(`thread-metadata-retry-${name}`),
+          binaryPath: peerPath,
+          cwd: NodeOS.tmpdir(),
+          runtimeMode: "full-access",
+          environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+        });
+        const eventsFiber = yield* runtime.events.pipe(
+          Stream.filter(
+            (event) =>
+              event.method === "collabAgent/metadataUpdated" &&
+              (event.payload as { effort?: string }).effort === "low",
+          ),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped,
+        );
+        yield* runtime.start();
+        yield* runtime.sendTurn({ input: "start child" });
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        assert.deepInclude(events[0]?.payload, {
+          agentThreadId: CHILD_A,
+          model: "gpt-6-astra",
+          effort: "low",
+        });
+        assert.equal(readRecordedRequests().length, 2);
+        yield* runtime.close;
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    );
+  }
+
+  it.live("stops after three failed child metadata lookups and logs exhaustion", () =>
+    Effect.gen(function* () {
+      const exhausted = yield* Deferred.make<void>();
+      const logger = Logger.make(({ message }) => {
+        if (String(message).includes("metadata remains incomplete after three attempts")) {
+          Deferred.doneUnsafe(exhausted, Effect.void);
+        }
+      });
+      const script = {
+        rootThreadId: ROOT,
+        recordRequests: true,
+        notifications: [capturedStartedActivity(), capturedStartedActivity()],
+        childResumeSnapshots: { [CHILD_A]: { error: "child unavailable" } },
+      };
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      NodeFS.writeFileSync(scriptPath, JSON.stringify(script), "utf8");
+      NodeFS.rmSync(`${scriptPath}.requests`, { force: true });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          NodeFS.rmSync(scriptPath, { force: true });
+          NodeFS.rmSync(`${scriptPath}.requests`, { force: true });
+        }),
+      );
+      yield* Effect.gen(function* () {
+        const runtime = yield* makeCodexSessionRuntime({
+          threadId: ThreadId.make("thread-metadata-retry-exhausted"),
+          binaryPath: peerPath,
+          cwd: NodeOS.tmpdir(),
+          runtimeMode: "full-access",
+          environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+        });
+        yield* runtime.start();
+        yield* runtime.sendTurn({ input: "start child" });
+        yield* Deferred.await(exhausted);
+        assert.equal(readRecordedRequests().length, 3);
+        yield* runtime.close;
+      }).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false })));
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 

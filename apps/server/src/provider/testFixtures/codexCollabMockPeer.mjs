@@ -18,6 +18,7 @@ const script = JSON.parse(NodeFS.readFileSync(process.env.T3_CODEX_COLLAB_SCRIPT
 const write = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 let turnStartCount = 0;
 let activeTurn;
+const resumeCounts = new Map();
 
 const rl = NodeReadline.createInterface({ input: process.stdin });
 rl.on("line", (line) => {
@@ -77,7 +78,12 @@ rl.on("line", (line) => {
       );
     }
     const threadId = message.params?.threadId;
-    const childSnapshot = script.childResumeSnapshots?.[threadId];
+    const snapshots = script.childResumeSnapshots?.[threadId];
+    const attempt = resumeCounts.get(threadId) ?? 0;
+    resumeCounts.set(threadId, attempt + 1);
+    const childSnapshot = Array.isArray(snapshots)
+      ? snapshots[Math.min(attempt, snapshots.length - 1)]
+      : snapshots;
     if (script.resumeRequestMarker) {
       write({
         jsonrpc: "2.0",
