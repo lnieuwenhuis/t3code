@@ -8,6 +8,7 @@ export interface ComposerPathSearchEntry {
 
 export interface ComposerPathSearchState {
   readonly entries: ReadonlyArray<ComposerPathSearchEntry>;
+  readonly truncated: boolean;
   readonly isPending: boolean;
   readonly error: string | null;
 }

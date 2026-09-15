@@ -220,6 +220,46 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceEntries", (it) => {
   });
 
   describe("search", () => {
+    it.effect("includes ignored composer paths and refreshes Claude filtering settings", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDir({ git: true });
+        yield* writeTextFile(cwd, ".gitignore", ".agent/\nignored.txt\n");
+        yield* writeTextFile(cwd, ".claude/settings.local.json", '{"respectGitignore":false}');
+        yield* writeTextFile(cwd, ".agent/instructions.md", "instructions");
+        yield* writeTextFile(cwd, "ignored.txt", "ignored");
+        yield* writeTextFile(cwd, ".agent/icon.svg", "<svg />");
+        yield* writeTextFile(cwd, "node_modules/large-package/index.js", "excluded");
+        const entries = yield* WorkspaceEntries.WorkspaceEntries;
+        const result = yield* entries.search({ cwd, query: "", limit: 100 });
+        expect(result.entries.map((entry) => entry.path)).toContain(".agent/instructions.md");
+        expect(result.entries.map((entry) => entry.path)).toContain("ignored.txt");
+        expect(result.entries.some((entry) => entry.path.startsWith("node_modules"))).toBe(false);
+        expect(result.entries.some((entry) => entry.path.startsWith(".git/"))).toBe(false);
+        const directories = yield* entries.search({
+          cwd,
+          query: "agent",
+          kind: "directory",
+          limit: 1,
+        });
+        expect(directories.entries).toEqual([{ path: ".agent", kind: "directory" }]);
+        const images = yield* entries.search({
+          cwd,
+          query: "",
+          kind: "directory",
+          imageOnly: true,
+          limit: 1,
+        });
+        expect(images.entries).toEqual([{ path: ".agent/icon.svg", kind: "file" }]);
+        const limited = yield* entries.search({ cwd, query: "", limit: 1 });
+        expect(limited.entries).toHaveLength(1);
+        expect(limited.truncated).toBe(true);
+        yield* writeTextFile(cwd, ".claude/settings.local.json", '{"respectGitignore":true}');
+        yield* entries.refresh(cwd);
+        const filtered = yield* entries.search({ cwd, query: "ignored", limit: 100 });
+        expect(filtered.entries.map((entry) => entry.path)).not.toContain("ignored.txt");
+      }),
+    );
+
     it.effect("returns files and directories relative to cwd", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTempDir();

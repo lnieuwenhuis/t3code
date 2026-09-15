@@ -1,14 +1,7 @@
-import fsPromises from "node:fs/promises";
-import path from "node:path";
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Effect } from "effect";
-import { afterEach, describe, expect, it, vi } from "vitest";
-
+import { Effect, FileSystem, Path } from "effect";
+import { describe, expect, it } from "@effect/vitest";
 import { extractClaudeRespectGitignore, resolveClaudeRespectGitignore } from "./claudeSettings.ts";
-
-const runWithNodeServices = <A>(effect: Effect.Effect<A, never, NodeServices.NodeServices>) =>
-  Effect.runPromise(Effect.provide(effect, NodeServices.layer));
 
 describe("extractClaudeRespectGitignore", () => {
   it("reads top-level settings.json values", () => {
@@ -27,54 +20,32 @@ describe("extractClaudeRespectGitignore", () => {
   });
 });
 
-describe("resolveClaudeRespectGitignore", () => {
-  const tempDirectories: string[] = [];
-
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await Promise.all(
-      tempDirectories
-        .splice(0)
-        .map((directory) => fsPromises.rm(directory, { force: true, recursive: true })),
-    );
-  });
-
-  it("defaults to respecting gitignore when no Claude setting is present", async () => {
-    const cwd = await fsPromises.mkdtemp(
-      path.join(process.env.TMPDIR ?? "/tmp", "t3code-claude-settings-cwd-"),
-    );
-    const homeDir = await fsPromises.mkdtemp(
-      path.join(process.env.TMPDIR ?? "/tmp", "t3code-claude-settings-home-"),
-    );
-    tempDirectories.push(cwd, homeDir);
-
-    await expect(
-      runWithNodeServices(resolveClaudeRespectGitignore(cwd, { homeDirectory: homeDir })),
-    ).resolves.toBe(true);
-  });
-
-  it("applies project-local settings over user settings", async () => {
-    const cwd = await fsPromises.mkdtemp(
-      path.join(process.env.TMPDIR ?? "/tmp", "t3code-claude-settings-cwd-"),
-    );
-    const homeDir = await fsPromises.mkdtemp(
-      path.join(process.env.TMPDIR ?? "/tmp", "t3code-claude-settings-home-"),
-    );
-    tempDirectories.push(cwd, homeDir);
-
-    await fsPromises.mkdir(path.join(homeDir, ".claude"), { recursive: true });
-    await fsPromises.mkdir(path.join(cwd, ".claude"), { recursive: true });
-    await fsPromises.writeFile(
-      path.join(homeDir, ".claude", "settings.json"),
-      '{"respectGitignore":true}',
-    );
-    await fsPromises.writeFile(
-      path.join(cwd, ".claude", "settings.local.json"),
-      '{"respectGitignore":false}',
-    );
-
-    await expect(
-      runWithNodeServices(resolveClaudeRespectGitignore(cwd, { homeDirectory: homeDir })),
-    ).resolves.toBe(false);
-  });
+it.layer(NodeServices.layer)("resolveClaudeRespectGitignore", (it) => {
+  it.effect("defaults to respecting gitignore when no Claude setting is present", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const cwd = yield* fs.makeTempDirectoryScoped();
+      const homeDirectory = yield* fs.makeTempDirectoryScoped();
+      expect(yield* resolveClaudeRespectGitignore(cwd, { homeDirectory })).toBe(true);
+    }),
+  );
+  it.effect("applies project-local settings over user settings", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cwd = yield* fs.makeTempDirectoryScoped();
+      const homeDirectory = yield* fs.makeTempDirectoryScoped();
+      yield* fs.makeDirectory(path.join(homeDirectory, ".claude"));
+      yield* fs.makeDirectory(path.join(cwd, ".claude"));
+      yield* fs.writeFileString(
+        path.join(homeDirectory, ".claude/settings.json"),
+        '{"respectGitignore":true}',
+      );
+      yield* fs.writeFileString(
+        path.join(cwd, ".claude/settings.local.json"),
+        '{"respectGitignore":false}',
+      );
+      expect(yield* resolveClaudeRespectGitignore(cwd, { homeDirectory })).toBe(false);
+    }),
+  );
 });

@@ -409,7 +409,7 @@ export const make = Effect.gen(function* () {
   const discardClone = Effect.fn("SourceControlRepositoryService.discardClone")(function* (
     destinationPath: string,
   ) {
-    const normalized = yield* normalizeDestinationPath(destinationPath);
+    const normalized = yield* normalizeDestinationPath(destinationPath, "unknown");
     // Only what git left behind may go. The destination was empty when the
     // clone started, so anything without a `.git` inside was put there by
     // someone else since; refuse rather than delete their files.
