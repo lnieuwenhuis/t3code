@@ -505,7 +505,7 @@ describe("ssh tunnel scripts", () => {
               tunnelKillCount += 1;
             });
           }
-          if (args.includes("sh") && args.includes("--")) {
+          if (args.some((arg, index) => arg === "-s" && args[index + 1] === "--")) {
             return makeSuccessfulProcess('{"remotePort":3773}\n');
           }
           if (args.includes("sh")) {
@@ -574,7 +574,11 @@ describe("ssh tunnel scripts", () => {
 
         yield* manager.ensureEnvironment(target);
 
-        assert.equal(spawnedCommands.filter((args) => args.includes("-N")).length, 2);
+        const tunnelCommands = spawnedCommands.filter((args) => args.includes("-N"));
+        assert.equal(tunnelCommands.length, 2);
+        for (const args of tunnelCommands) {
+          assert.deepEqual(args.slice(-2), ["--", "julius@devbox"]);
+        }
         assert.equal(tunnelKillCount, 1);
       }).pipe(
         Effect.provide(layer),
@@ -626,7 +630,7 @@ describe("ssh tunnel scripts", () => {
               }
               return tunnel;
             }
-            if (args.includes("--")) {
+            if (args.some((arg, index) => arg === "-s" && args[index + 1] === "--")) {
               if (isTarget) {
                 launches += 1;
                 remoteRunning = true;
