@@ -6960,6 +6960,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
 
     const delivery = cohort?.delivery ?? null;
+    // A policy upgrade can revisit a task already owned by this wake. Only
+    // new siblings become pending behind it; demoting its own task would
+    // make finalization schedule that same result again as a successor.
+    if (taskDelivery?.state === "claimed" && delivery?.taskIds.includes(input.task.id)) {
+      return {
+        task: input.updatedTask,
+        parentRun: undefined,
+        message: undefined,
+        offer: false,
+      };
+    }
     const deliveryRun = completionDeliveryRun(input.parentProjection, delivery);
     if (delivery !== null) {
       if (deliveryRun?.status === "queued" && deliveryRun.userMessageId === delivery?.messageId) {
