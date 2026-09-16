@@ -9,12 +9,23 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  deriveOpenCodeRunEvents,
-  openCodeRunItemKey,
-  parseOpenCodeRunCommand,
-  parseOpenCodeRunOutput,
-} from "./OpenCodeRunSubagents.ts";
+import { deriveDelegatedRunEvents, delegatedRunItemKey } from "./DelegatedRunSubagents.ts";
+
+import { parseDelegatedRunCommand } from "./DelegatedRunCommand.ts";
+import { parseDelegatedRunOutput } from "./DelegatedRunOutput.ts";
+
+// Keep the original OpenCode regression cases while checking the generalized parser.
+const parseOpenCodeRunCommand = (command: string) => {
+  const parsed = parseDelegatedRunCommand(command);
+  if (!parsed || parsed.provider !== "opencode") return undefined;
+  return {
+    prompt: parsed.prompt,
+    model: parsed.model,
+    agent: parsed.agent,
+    jsonOutput: parsed.jsonOutput,
+  };
+};
+const parseOpenCodeRunOutput = (output: string) => parseDelegatedRunOutput("opencode", output);
 
 const base = {
   provider: ProviderDriverKind.make("claude"),
@@ -382,7 +393,7 @@ describe("parseOpenCodeRunOutput", () => {
   });
 });
 
-describe("deriveOpenCodeRunEvents", () => {
+describe("deriveDelegatedRunEvents", () => {
   const claudeItem = (
     type: "item.started" | "item.updated" | "item.completed",
     input: Record<string, unknown>,
@@ -407,9 +418,9 @@ describe("deriveOpenCodeRunEvents", () => {
   const command = 'opencode run --format json -m opencode-go/deepseek-v4.1-flash "Run both tasks"';
 
   it("keys only shell items", () => {
-    expect(openCodeRunItemKey(claudeItem("item.started", {}))).toBe("thread-1:tool-1");
+    expect(delegatedRunItemKey(claudeItem("item.started", {}))).toBe("thread-1:tool-1");
     expect(
-      openCodeRunItemKey({
+      delegatedRunItemKey({
         ...base,
         type: "item.completed",
         eventId: EventId.make("evt-read"),
@@ -419,16 +430,18 @@ describe("deriveOpenCodeRunEvents", () => {
   });
 
   it("stays quiet until the streamed command is readable", () => {
-    expect(deriveOpenCodeRunEvents(claudeItem("item.started", {}), { started: false })).toEqual([]);
+    expect(deriveDelegatedRunEvents(claudeItem("item.started", {}), { started: false })).toEqual(
+      [],
+    );
     expect(
-      deriveOpenCodeRunEvents(claudeItem("item.updated", { command: "bun run lint" }), {
+      deriveDelegatedRunEvents(claudeItem("item.updated", { command: "bun run lint" }), {
         started: false,
       }),
     ).toEqual([]);
   });
 
   it("starts the delegated run once from the first readable command", () => {
-    const events = deriveOpenCodeRunEvents(claudeItem("item.updated", { command }), {
+    const events = deriveDelegatedRunEvents(claudeItem("item.updated", { command }), {
       started: false,
     });
     expect(events).toEqual([
@@ -451,20 +464,20 @@ describe("deriveOpenCodeRunEvents", () => {
       },
     ]);
     expect(
-      deriveOpenCodeRunEvents(claudeItem("item.updated", { command }), { started: true }),
+      deriveDelegatedRunEvents(claudeItem("item.updated", { command }), { started: true }),
     ).toEqual([]);
   });
 
   it("skips background shells whose output arrives elsewhere", () => {
     expect(
-      deriveOpenCodeRunEvents(claudeItem("item.updated", { command, run_in_background: true }), {
+      deriveDelegatedRunEvents(claudeItem("item.updated", { command, run_in_background: true }), {
         started: false,
       }),
     ).toEqual([]);
   });
 
   it("settles the run and its children from the captured JSON output", () => {
-    const events = deriveOpenCodeRunEvents(
+    const events = deriveDelegatedRunEvents(
       claudeItem(
         "item.completed",
         { command },
@@ -476,11 +489,23 @@ describe("deriveOpenCodeRunEvents", () => {
       { started: true },
     );
     expect(events.map((event) => [event.type, event.eventId])).toEqual([
-      ["task.started", 'opencode-run:["thread-1","turn-1","tool-1"]:00000002'],
-      ["task.completed", 'opencode-run:["thread-1","turn-1","tool-1"]:00000003'],
-      ["task.started", 'opencode-run:["thread-1","turn-1","tool-1"]:00000004'],
-      ["task.completed", 'opencode-run:["thread-1","turn-1","tool-1"]:00000005'],
-      ["task.completed", 'opencode-run:["thread-1","turn-1","tool-1"]:00000006'],
+      [
+        "task.started",
+        'opencode-run:["thread-1","turn-1","tool-1"]:00000002:"opencode-run:tool-1:ses_child_1":1',
+      ],
+      [
+        "task.completed",
+        'opencode-run:["thread-1","turn-1","tool-1"]:00000002:"opencode-run:tool-1:ses_child_1":2',
+      ],
+      [
+        "task.started",
+        'opencode-run:["thread-1","turn-1","tool-1"]:00000002:"opencode-run:tool-1:ses_child_2":1',
+      ],
+      [
+        "task.completed",
+        'opencode-run:["thread-1","turn-1","tool-1"]:00000002:"opencode-run:tool-1:ses_child_2":2',
+      ],
+      ["task.completed", 'opencode-run:terminal:["thread-1","tool-1"]'],
     ]);
     expect(events[0]?.payload).toEqual({
       taskId: "opencode-run:tool-1:ses_child_1",
@@ -518,7 +543,7 @@ describe("deriveOpenCodeRunEvents", () => {
   });
 
   it("starts and settles in one go when the command was never seen before", () => {
-    const events = deriveOpenCodeRunEvents(
+    const events = deriveDelegatedRunEvents(
       claudeItem(
         "item.completed",
         { command: "opencode run 'Say hi'" },
@@ -538,7 +563,7 @@ describe("deriveOpenCodeRunEvents", () => {
   it.each(["stdout", "output", "content", "acp"])(
     "reads fallback %s when item metadata has no aggregated output",
     (outputKey) => {
-      const events = deriveOpenCodeRunEvents(
+      const events = deriveDelegatedRunEvents(
         {
           ...base,
           type: "item.completed",
@@ -572,7 +597,7 @@ describe("deriveOpenCodeRunEvents", () => {
   );
 
   it("preserves an explicitly empty aggregated output over fallbacks", () => {
-    const events = deriveOpenCodeRunEvents(
+    const events = deriveDelegatedRunEvents(
       {
         ...base,
         type: "item.completed",
@@ -591,7 +616,7 @@ describe("deriveOpenCodeRunEvents", () => {
   });
 
   it("reads Codex and ACP shaped command items", () => {
-    const codex = deriveOpenCodeRunEvents(
+    const codex = deriveDelegatedRunEvents(
       {
         ...base,
         provider: ProviderDriverKind.make("codex"),
@@ -618,7 +643,7 @@ describe("deriveOpenCodeRunEvents", () => {
       title: "Codex says hi",
     });
 
-    const acp = deriveOpenCodeRunEvents(
+    const acp = deriveDelegatedRunEvents(
       {
         ...base,
         provider: ProviderDriverKind.make("cursor"),
@@ -638,5 +663,122 @@ describe("deriveOpenCodeRunEvents", () => {
       { started: false },
     );
     expect(acp[1]?.payload).toMatchObject({ summary: "hi from cursor", title: "Cursor says hi" });
+  });
+});
+
+describe("delegated provider coverage", () => {
+  const targets = [
+    ["codex", 'codex exec --json -m gpt-6-astra "Review changes"'],
+    ["claude", 'claude -p --output-format stream-json --model sonnet "Review changes"'],
+    ["cursor", 'agent -p --output-format stream-json --model auto "Review changes"'],
+    ["grok", 'grok -p "Review changes" --output-format json'],
+    ["opencode", 'opencode run --format json -m opencode-go/deepseek-v4.1-flash "Review changes"'],
+  ] as const;
+
+  it.each(["codex", "claude", "opencode", "cursor", "grok", "antigravity"])(
+    "detects delegated runs from %s shell items",
+    (provider) => {
+      for (const [target, command] of targets) {
+        const event: ProviderRuntimeEvent = {
+          ...base,
+          provider: ProviderDriverKind.make(provider),
+          type: "item.completed",
+          eventId: EventId.make("matrix"),
+          payload: {
+            itemType: "command_execution",
+            status: "completed",
+            data:
+              provider === "codex"
+                ? { item: { command, aggregatedOutput: "", exitCode: 0 } }
+                : provider === "claude"
+                  ? { input: { command }, result: { content: "" } }
+                  : provider === "opencode"
+                    ? {
+                        command,
+                        state: { input: { command }, status: "completed", output: "" },
+                        result: "",
+                      }
+                    : { command, rawOutput: { stdout: "" } },
+          },
+        };
+        const events = deriveDelegatedRunEvents(event, { started: false });
+        expect(
+          events.map((entry) => entry.type),
+          target,
+        ).toEqual(["task.started", "task.completed"]);
+        expect(events.at(-1)?.payload).toMatchObject({ role: target, status: "completed" });
+      }
+    },
+  );
+
+  it("marks a nonzero command exit as failed even when the shell tool completed", () => {
+    const events = deriveDelegatedRunEvents(
+      {
+        ...base,
+        type: "item.completed",
+        eventId: EventId.make("exit"),
+        payload: {
+          itemType: "command_execution",
+          status: "completed",
+          data: {
+            item: { command: "opencode run test", exitCode: 1, aggregatedOutput: "Login required" },
+          },
+        },
+      },
+      { started: false },
+    );
+    expect(events.at(-1)?.payload).toMatchObject({ status: "failed", summary: "Login required" });
+  });
+
+  it("retains OpenCode parent error text", () => {
+    const events = deriveDelegatedRunEvents(
+      {
+        ...base,
+        type: "item.completed",
+        eventId: EventId.make("error"),
+        payload: {
+          itemType: "command_execution",
+          status: "failed",
+          data: {
+            command: "opencode run test",
+            state: { status: "error", error: "Permission denied" },
+          },
+        },
+      },
+      { started: false },
+    );
+    expect(events.at(-1)?.payload).toMatchObject({
+      status: "failed",
+      summary: "Permission denied",
+    });
+  });
+});
+
+describe("delegated event ordering", () => {
+  it("keeps a completion-only observed model after its requested model at equal timestamps", () => {
+    const events = deriveDelegatedRunEvents(
+      {
+        ...base,
+        type: "item.completed",
+        eventId: EventId.make("completion-only"),
+        payload: {
+          itemType: "command_execution",
+          status: "completed",
+          data: {
+            command: 'claude -p --model sonnet --output-format stream-json "Review"',
+            result: [
+              JSON.stringify({ type: "system", subtype: "init", model: "claude-sonnet-4-6" }),
+              JSON.stringify({ type: "result", subtype: "success", result: "Done" }),
+            ].join("\n"),
+          },
+        },
+      },
+      { started: false },
+    );
+    const ordered = [...events].sort((a, b) =>
+      a.eventId < b.eventId ? -1 : a.eventId > b.eventId ? 1 : 0,
+    );
+    expect(ordered.map((event) => event.type)).toEqual(["task.started", "task.completed"]);
+    expect(ordered.at(-1)?.payload).toMatchObject({ model: "claude-sonnet-4-6" });
   });
 });

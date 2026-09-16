@@ -54,7 +54,12 @@ import { projectActivityPayload } from "../ActivityPayloadProjection.ts";
 import { forkParked } from "../../serverActivation.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { canReplaceThreadTitle } from "../threadTitles.ts";
-import { deriveOpenCodeRunEvents, openCodeRunItemKey } from "../OpenCodeRunSubagents.ts";
+import {
+  deriveDelegatedRunEvents,
+  delegatedRunItemKey,
+  delegatedRunInvocation,
+  delegatedRunTerminalEventId,
+} from "../DelegatedRunSubagents.ts";
 
 const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${turnId}`;
 const providerTaskKey = (threadId: ThreadId, taskId: string) => `${threadId}:${taskId}`;
@@ -969,10 +974,27 @@ const make = Effect.gen(function* () {
 
   // Retain terminal state so redelivered shell items cannot repeat the run's
   // parent or child activities. Only advance state after derived events land.
-  const openCodeRunStateByItemKey = yield* Cache.make<string, "started" | "completed">({
+  type DelegatedRunState =
+    | { readonly status: "completed" }
+    | {
+        readonly status: "started";
+        readonly invocation: NonNullable<ReturnType<typeof delegatedRunInvocation>>;
+        readonly item: Extract<
+          ProviderRuntimeEvent,
+          { type: "item.started" | "item.updated" | "item.completed" }
+        >;
+      };
+  // Active shells can outlive the replay cache TTL. Their ownership ends only
+  // with the shell or provider session, never because wall-clock time elapsed.
+  const activeDelegatedRuns = new Map<string, Extract<DelegatedRunState, { status: "started" }>>();
+  const completedDelegatedRun = { status: "completed" } as const;
+  const delegatedRunStateByItemKey = yield* Cache.make<
+    string,
+    Extract<DelegatedRunState, { status: "completed" }>
+  >({
     capacity: TASK_DESCRIPTION_BY_TASK_CACHE_CAPACITY,
     timeToLive: TASK_DESCRIPTION_BY_TASK_TTL,
-    lookup: () => Effect.succeed("started" as const),
+    lookup: () => Effect.succeed(completedDelegatedRun),
   });
 
   const resolveThreadRuntimeContext = Effect.fn("resolveThreadRuntimeContext")(function* (
@@ -2171,23 +2193,92 @@ const make = Effect.gen(function* () {
 
   const processDomainEvent = (_event: TurnStartRequestedDomainEvent) => Effect.void;
 
-  // A shell item that runs `opencode run` is also a delegated agent: after
+  // A shell item that runs a provider CLI is also a delegated agent: after
   // the item's own activity lands, feed the derived task.* events through the
   // same path so liveness, titles, and the Agents roster all follow.
-  const processRuntimeEventWithOpenCodeRuns = (event: ProviderRuntimeEvent) =>
+  const processRuntimeEventWithDelegatedRuns = (event: ProviderRuntimeEvent) =>
     Effect.gen(function* () {
       yield* processRuntimeEvent(event);
-      const itemKey = openCodeRunItemKey(event);
+      // A cancelled turn may never deliver the shell's terminal item. Settle only
+      // runs owned by that provider/turn, and retain the terminal receipt for late replay.
+      if (
+        event.type === "session.exited" ||
+        event.type === "turn.aborted" ||
+        (event.type === "turn.completed" && event.payload.state !== "completed")
+      ) {
+        for (const [key, state] of Array.from(activeDelegatedRuns)) {
+          if (
+            state?.status !== "started" ||
+            state.item.threadId !== event.threadId ||
+            state.item.provider !== event.provider ||
+            state.item.providerInstanceId !== event.providerInstanceId ||
+            (event.type !== "session.exited" && state.item.turnId !== event.turnId)
+          )
+            continue;
+          const failed =
+            event.type === "turn.completed"
+              ? event.payload.state === "failed"
+              : event.type === "session.exited" && event.payload.exitKind === "error";
+          const terminal: ProviderRuntimeEvent = {
+            ...state.item,
+            eventId: event.eventId,
+            createdAt: event.createdAt,
+            type: "item.completed",
+            payload: { itemType: "command_execution", status: failed ? "failed" : "completed" },
+          };
+          const derived = deriveDelegatedRunEvents(terminal, {
+            started: true,
+            invocation: state.invocation,
+            stopped: !failed,
+          });
+          yield* Effect.forEach(derived, (entry) => processRuntimeEvent(entry, true), {
+            discard: true,
+          });
+          activeDelegatedRuns.delete(key);
+          yield* Cache.set(delegatedRunStateByItemKey, key, completedDelegatedRun);
+        }
+        return;
+      }
+      const itemKey = delegatedRunItemKey(event);
       if (itemKey === undefined) {
         return;
       }
-      const state = Option.getOrUndefined(
-        yield* Cache.getOption(openCodeRunStateByItemKey, itemKey),
-      );
-      if (state === "completed") {
+      const state =
+        activeDelegatedRuns.get(itemKey) ??
+        Option.getOrUndefined(yield* Cache.getOption(delegatedRunStateByItemKey, itemKey));
+      if (state?.status === "completed") {
         return;
       }
-      const derived = deriveOpenCodeRunEvents(event, { started: state === "started" });
+      const invocation =
+        delegatedRunInvocation(event) ??
+        (state?.status === "started" ? state.invocation : undefined);
+      if (
+        !invocation ||
+        (event.type !== "item.started" &&
+          event.type !== "item.updated" &&
+          event.type !== "item.completed")
+      )
+        return;
+      // A stable terminal receipt survives cache expiry and process restarts.
+      // Consult it before deriving children too: late output cannot revive a stopped run.
+      if (state === undefined) {
+        const terminalId = delegatedRunTerminalEventId(event, invocation);
+        const receipt = yield* commandReceipts.getByCommandId({
+          commandId: CommandId.make(`provider:${terminalId}:thread-activity-append`),
+        });
+        if (Option.isSome(receipt) && receipt.value.status === "accepted") {
+          yield* Cache.set(delegatedRunStateByItemKey, itemKey, completedDelegatedRun);
+          return;
+        }
+      }
+      const item =
+        state?.status === "started" && event.turnId === undefined
+          ? { ...event, turnId: state.item.turnId }
+          : event;
+      const derived = deriveDelegatedRunEvents(item, {
+        started: state?.status === "started",
+        invocation,
+      });
       if (derived.length === 0) {
         return;
       }
@@ -2196,16 +2287,21 @@ const make = Effect.gen(function* () {
       yield* Effect.forEach(derived, (derivedEvent) => processRuntimeEvent(derivedEvent, true), {
         discard: true,
       });
-      yield* Cache.set(
-        openCodeRunStateByItemKey,
-        itemKey,
-        event.type === "item.completed" ? "completed" : "started",
-      );
+      if (event.type === "item.completed") {
+        activeDelegatedRuns.delete(itemKey);
+        yield* Cache.set(delegatedRunStateByItemKey, itemKey, completedDelegatedRun);
+      } else {
+        activeDelegatedRuns.set(itemKey, {
+          status: "started",
+          invocation,
+          item: { ...item, payload: { itemType: "command_execution" } },
+        });
+      }
     });
 
   const processInput = (input: RuntimeIngestionInput) =>
     input.source === "runtime"
-      ? processRuntimeEventWithOpenCodeRuns(input.event)
+      ? processRuntimeEventWithDelegatedRuns(input.event)
       : processDomainEvent(input.event);
 
   const processInputSafely = (input: RuntimeIngestionInput) =>

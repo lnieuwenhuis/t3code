@@ -298,6 +298,22 @@ describe("ProviderRuntimeIngestion", () => {
         });
       }),
     ).pipe(Layer.provide(projectionSnapshotLayer));
+    // Real clock plus an offset the test can advance, so cache expiry in
+    // ingestion can be driven without sleeping. Sleeps stay real.
+    let clockOffsetMs = 0;
+    const realClock = Effect.runSync(Effect.service(Clock.Clock));
+    const shiftedClock: Clock.Clock = {
+      currentTimeMillisUnsafe: () => realClock.currentTimeMillisUnsafe() + clockOffsetMs,
+      currentTimeMillis: Effect.sync(() => realClock.currentTimeMillisUnsafe() + clockOffsetMs),
+      currentTimeNanosUnsafe: () =>
+        realClock.currentTimeNanosUnsafe() + BigInt(clockOffsetMs) * 1_000_000n,
+      currentTimeNanos: Effect.sync(
+        () => realClock.currentTimeNanosUnsafe() + BigInt(clockOffsetMs) * 1_000_000n,
+      ),
+      monotonicTimeNanosUnsafe: () => realClock.monotonicTimeNanosUnsafe(),
+      monotonicTimeNanos: realClock.monotonicTimeNanos,
+      sleep: (duration) => realClock.sleep(duration),
+    };
     const layer = ProviderRuntimeIngestionLive.pipe(
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(ingestionProjectionSnapshotLayer),
@@ -315,7 +331,7 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(Layer.succeed(Tracer.Tracer, sqlCounter.tracer)),
     );
     const testRuntime = ManagedRuntime.make(
-      options?.clock ? layer.pipe(Layer.provide(Layer.succeed(Clock.Clock, options.clock))) : layer,
+      layer.pipe(Layer.provide(Layer.succeed(Clock.Clock, options?.clock ?? shiftedClock))),
     );
     runtime = testRuntime;
     const engine = await testRuntime.runPromise(Effect.service(OrchestrationEngineService));
@@ -394,6 +410,9 @@ describe("ProviderRuntimeIngestion", () => {
             .getThreadShellById(asThreadId("thread-1"))
             .pipe(Effect.map(Option.getOrThrow)),
         ),
+      advanceClock: (ms: number) => {
+        clockOffsetMs += ms;
+      },
       emit: provider.emit,
       emitAndDrain,
       sqlCount: sqlCounter.count,
@@ -1714,6 +1733,217 @@ describe("ProviderRuntimeIngestion", () => {
     });
     expect((await harness.readThreadShell()).backgroundLiveness).toBeNull();
   });
+
+  it.each(["codex", "claude", "opencode", "cursor", "grok", "antigravity"])(
+    "persists cross-provider agents from %s and settles command-less completions once",
+    async (provider) => {
+      const harness = await createHarness();
+      const command = 'codex exec --json --model gpt-6-astra "Review changes"';
+      const shell = {
+        provider: ProviderDriverKind.make(provider),
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-delegated"),
+        itemId: asItemId("shell-delegated"),
+      };
+      await harness.emitAndDrain([
+        {
+          ...shell,
+          type: "item.updated",
+          eventId: asEventId("delegate-start"),
+          createdAt: "2026-01-01T00:00:00.000Z",
+          payload: { itemType: "command_execution", status: "inProgress", data: { command } },
+        },
+      ]);
+      expect((await harness.readThreadShell()).backgroundLiveness).toBe("working");
+      const completion = {
+        ...shell,
+        type: "item.completed",
+        eventId: asEventId("delegate-end"),
+        createdAt: "2026-01-01T00:00:01.000Z",
+        payload: {
+          itemType: "command_execution",
+          status: "completed",
+          data: {
+            rawOutput: {
+              stdout: JSON.stringify({
+                type: "item.completed",
+                item: { type: "agent_message", text: "Reviewed" },
+              }),
+            },
+          },
+        },
+      };
+      await harness.emitAndDrain([
+        completion,
+        { ...completion, eventId: asEventId("delegate-replay") },
+      ]);
+      const activities = (await harness.readModel()).threads[0]!.activities.filter((entry) =>
+        entry.kind.startsWith("task."),
+      );
+      expect(activities.map((entry) => entry.kind)).toEqual(["task.started", "task.completed"]);
+      expect(activities.at(-1)?.payload).toMatchObject({
+        taskId: "codex-run:shell-delegated",
+        agentKind: "agent",
+        status: "completed",
+        role: "codex",
+        model: "gpt-6-astra",
+        summary: "Reviewed",
+      });
+      expect((await harness.readThreadShell()).backgroundLiveness).toBeNull();
+    },
+  );
+
+  it.each(["turn.aborted", "session.exited", "turn.completed"])(
+    "settles delegated runs on %s when the shell completion is lost",
+    async (type) => {
+      const harness = await createHarness();
+      const shell = {
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-delegate-stop"),
+        itemId: asItemId("shell-delegate-stop"),
+      };
+      await harness.emitAndDrain([
+        {
+          ...shell,
+          type: "item.started",
+          eventId: asEventId("delegate-start"),
+          createdAt: "2026-01-01T00:00:00.000Z",
+          payload: {
+            itemType: "command_execution",
+            data: { command: 'claude -p "Review changes"' },
+          },
+        },
+      ]);
+      expect((await harness.readThreadShell()).backgroundLiveness).toBe("working");
+      await harness.emitAndDrain([
+        {
+          ...shell,
+          type,
+          eventId: asEventId("delegate-stop"),
+          createdAt: "2026-01-01T00:00:01.000Z",
+          payload: type === "turn.completed" ? { state: "interrupted" } : { reason: "Stopped" },
+        },
+        {
+          ...shell,
+          type: "item.completed",
+          eventId: asEventId("late-completion"),
+          createdAt: "2026-01-01T00:00:02.000Z",
+          payload: {
+            itemType: "command_execution",
+            status: "completed",
+            data: { command: 'claude -p "Review changes"', result: "late" },
+          },
+        },
+      ]);
+      const activities = (await harness.readModel()).threads[0]!.activities.filter((entry) =>
+        entry.kind.startsWith("task."),
+      );
+      expect(activities.map((entry) => entry.kind)).toEqual(["task.started", "task.completed"]);
+      expect(activities.at(-1)?.payload).toMatchObject({ status: "stopped" });
+      expect((await harness.readThreadShell()).backgroundLiveness).not.toBe("working");
+    },
+  );
+
+  it("does not revive a cancelled delegated run after the cache expires", async () => {
+    const harness = await createHarness();
+    const shell = {
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-expired"),
+      itemId: asItemId("shell-expired"),
+    };
+    const command = 'opencode run --format json "Review changes"';
+    await harness.emitAndDrain([
+      {
+        ...shell,
+        type: "item.started",
+        eventId: asEventId("expired-start"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        payload: { itemType: "command_execution", data: { command } },
+      },
+      {
+        ...shell,
+        type: "turn.aborted",
+        eventId: asEventId("expired-stop"),
+        createdAt: "2026-01-01T00:00:01.000Z",
+        payload: { reason: "Stopped" },
+      },
+    ]);
+    harness.advanceClock(121 * 60 * 1000);
+    await harness.emitAndDrain([
+      {
+        ...shell,
+        type: "item.completed",
+        eventId: asEventId("expired-replay"),
+        createdAt: "2026-01-01T03:00:00.000Z",
+        payload: {
+          itemType: "command_execution",
+          status: "completed",
+          data: {
+            command,
+            result: JSON.stringify({
+              type: "tool_use",
+              part: {
+                tool: "task",
+                callID: "late-child",
+                state: { status: "completed", output: "late" },
+              },
+            }),
+          },
+        },
+      },
+    ]);
+    const activities = (await harness.readModel()).threads[0]!.activities.filter((entry) =>
+      entry.kind.startsWith("task."),
+    );
+    expect(activities.map((entry) => entry.kind)).toEqual(["task.started", "task.completed"]);
+    expect(activities.at(-1)?.payload).toMatchObject({ status: "stopped" });
+    expect((await harness.readThreadShell()).backgroundLiveness).not.toBe("working");
+  });
+
+  it.each(["item.completed", "turn.aborted"])(
+    "retains active delegated ownership beyond the replay TTL for %s",
+    async (type) => {
+      const harness = await createHarness();
+      const shell = {
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-long-run"),
+        itemId: asItemId("shell-long-run"),
+      };
+      await harness.emitAndDrain([
+        {
+          ...shell,
+          type: "item.started",
+          eventId: asEventId("long-start"),
+          createdAt: "2026-01-01T00:00:00.000Z",
+          payload: { itemType: "command_execution", data: { command: 'claude -p "Long task"' } },
+        },
+      ]);
+      harness.advanceClock(121 * 60 * 1000);
+      await harness.emitAndDrain([
+        {
+          ...shell,
+          type,
+          eventId: asEventId("long-end"),
+          createdAt: "2026-01-01T03:00:00.000Z",
+          payload:
+            type === "item.completed"
+              ? { itemType: "command_execution", status: "completed", data: { result: "Done" } }
+              : { reason: "Stopped" },
+        },
+      ]);
+      const activities = (await harness.readModel()).threads[0]!.activities.filter((entry) =>
+        entry.kind.startsWith("task."),
+      );
+      expect(activities.map((entry) => entry.kind)).toEqual(["task.started", "task.completed"]);
+      expect(activities.at(-1)?.payload).toMatchObject({
+        status: type === "item.completed" ? "completed" : "stopped",
+      });
+      expect((await harness.readThreadShell()).backgroundLiveness).not.toBe("working");
+    },
+  );
 
   it("uses structured read-file paths when available", async () => {
     const harness = await createHarness();

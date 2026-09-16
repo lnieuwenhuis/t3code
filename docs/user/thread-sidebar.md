@@ -116,9 +116,36 @@ for custom configuration.
 ## Inspect agent work
 
 On web and desktop, use **Agents** to follow work delegated to subagents. This
-includes `opencode run` commands the agent launches from its shell tool; see
-[OpenCode](./providers-opencode.md#delegating-to-opencode-from-another-provider).
+includes [provider runs delegated through shell commands](#delegating-between-providers).
 
 Expand a tool call in the conversation to see its full command and output.
 Summaries shorten shell wrappers and can still describe the latest call after it
 finishes; the call's own result shows its status.
+
+## Delegating between providers
+
+Ask your agent to run another installed provider through its shell tool. T3 Code
+tracks foreground runs from Codex, Claude, OpenCode, Cursor, Grok, and Antigravity
+threads, regardless of which provider the thread uses.
+
+| Delegated provider | Command               | Structured output      |
+| ------------------ | --------------------- | ---------------------- |
+| OpenCode           | `opencode run "task"` | `--format json`        |
+| Codex              | `codex exec "task"`   | `--json`               |
+| Claude             | `claude -p "task"`    | `--output-format json` |
+| Cursor             | `agent -p "task"`     | `--output-format json` |
+| Grok               | `grok -p "task"`      | `--output-format json` |
+
+The run appears in **Agents**, with its requested model when one is specified.
+Structured output adds the final reply and usage when the provider reports them.
+Native child agents appear after the command finishes when the output exposes
+their identities and results. Codex's exec output does not expose its native
+child agents.
+
+Use one foreground provider invocation per shell tool call for reliable attribution.
+PowerShell, cmd, and POSIX shell wrappers are supported, including executable paths.
+Background jobs, encoded commands, and invocations hidden inside scripts cannot be
+tracked this way. File-based or dynamically constructed prompts may appear without
+a readable task description. Install and authenticate the child provider on the
+machine where the shell command runs; the parent provider's session does not supply
+the child's credentials or permission settings.
