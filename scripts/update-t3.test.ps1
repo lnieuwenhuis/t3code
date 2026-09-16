@@ -4,6 +4,18 @@ Set-StrictMode -Version Latest
 $realDependencyInstall = ${function:Install-T3ResolutionDependencies}
 $realTestRunner = ${function:Invoke-T3ResolutionTests}
 
+$lockPath = Join-Path $env:TEMP ('t3-lock-test-' + [guid]::NewGuid().ToString('N'))
+$held = [IO.File]::Open($lockPath, 'OpenOrCreate', 'ReadWrite', 'None')
+try {
+    $refused = $false
+    try { Invoke-T3Exclusive $lockPath { throw 'Action must not run' } } catch { $refused = $_.Exception.Message -match 'already running' }
+    if (-not $refused) { throw 'Concurrent updater was not refused' }
+} finally { $held.Dispose() }
+try { Invoke-T3Exclusive $lockPath { throw 'Expected action failure' } } catch {
+    if ($_.Exception.Message -ne 'Expected action failure') { throw }
+}
+Invoke-T3Exclusive $lockPath { Write-Host 'PASS: updater lock released after failure' }
+
 $root = Join-Path $env:TEMP ('t3-sync-test-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $root | Out-Null
 function G { param([string[]]$A) & git @A | Out-Null; if ($LASTEXITCODE) { throw "git failed: $A" } }

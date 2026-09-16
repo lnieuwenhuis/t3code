@@ -226,7 +226,14 @@ Otherwise return blocked with the exact reason. The updater will stage, commit, 
     }
 }
 
-function Invoke-T3Update {
+function Invoke-T3Exclusive {
+    param([string]$LockPath, [scriptblock]$Action)
+    try { $lock = [IO.File]::Open($LockPath, 'OpenOrCreate', 'ReadWrite', 'None') }
+    catch [IO.IOException] { throw "Another updater is already running, or its lock is unavailable: $LockPath" }
+    try { & $Action } finally { $lock.Dispose() }
+}
+
+function Invoke-T3UpdateCore {
     if ($Help) {
         Write-Output @'
 update_t3             Merge pingdotgg/t3code main into lnieuwenhuis/t3code main,
@@ -240,6 +247,8 @@ GitHub (lnieuwenhuis), Codex, and the existing Windows build prerequisites.
 Conflicts are announced in the terminal. Failed checks stop publishing/installing.
 No force pushes. A concurrent remote update stops this run; rerun to merge afresh.
 Run directories, reports and artifacts are retained under Documents\GitHub\t3code-updates.
+After installation, cleanup keeps the two newest successful runs and downloaded builds.
+Failed, build-only, unmarked and modified runs are preserved for recovery.
 The unsigned native Windows build replaces T3 Code but is not launched. No bundled WSL runtime.
 '@
         return
@@ -261,6 +270,9 @@ The unsigned native Windows build replaces T3 Code but is not launched. No bundl
         New-Item -ItemType Directory -Path $runRoot | Out-Null
     }
     $checkout = Join-Path $runRoot 'source'
+    # A resumed attempt is no longer eligible for cleanup until installation succeeds again.
+    $completionPath = Join-Path $runRoot '.update-complete.json'
+    if (Test-Path -LiteralPath $completionPath) { Remove-Item -LiteralPath $completionPath }
     $artifacts = Join-Path $runRoot ('artifacts-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     Write-Host "Update run: $runRoot"
     Sync-T3Source -ForkUrl 'https://github.com/lnieuwenhuis/t3code.git' -UpstreamUrl 'https://github.com/pingdotgg/t3code.git' -Checkout $checkout -Resume:([bool]$ResumeRun) -Publish:(-not $BuildOnly) -ResolveConflicts ${function:Resolve-T3Conflicts} -Verify {
@@ -278,6 +290,22 @@ The unsigned native Windows build replaces T3 Code but is not launched. No bundl
     $process = Start-Process -FilePath $build.installer -ArgumentList '/S', '/currentuser' -WindowStyle Hidden -Wait -PassThru
     if ($process.ExitCode -ne 0) { throw "Fork updated, but installation failed ($($process.ExitCode)). Installer: $($build.installer)" }
     Write-Host 'Fork synchronized and installed. Launch T3 Code when ready.'
+    try {
+        [ordered]@{ schemaVersion = 1; completedAt = [DateTime]::UtcNow.ToString('o'); commit = $build.commit } |
+            ConvertTo-Json | Set-Content -LiteralPath $completionPath -Encoding UTF8
+        . (Join-Path $PSScriptRoot 't3-update-cleanup.ps1')
+        Invoke-T3Cleanup -RunsRoot $runsRoot -BuildsRoot (Join-Path $env:USERPROFILE 'Downloads\T3Code-Fork') -CurrentRun $runRoot
+    } catch { Write-Warning "Update installed, but cleanup could not finish: $($_.Exception.Message)" }
+}
+
+function Invoke-T3Update {
+    if ($Help) { Invoke-T3UpdateCore; return }
+    if (-not $BuildOnly -and @(Get-Process | Where-Object ProcessName -Like 'T3 Code*').Count) {
+        throw 'Close T3 Code, then run update_t3 from an external terminal. Nothing was changed.'
+    }
+    $runsRoot = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'GitHub\t3code-updates'
+    New-Item -ItemType Directory -Path $runsRoot -Force | Out-Null
+    Invoke-T3Exclusive (Join-Path $runsRoot '.update.lock') { Invoke-T3UpdateCore }
 }
 
 if ($MyInvocation.InvocationName -ne '.') {

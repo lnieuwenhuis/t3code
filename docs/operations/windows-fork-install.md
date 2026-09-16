@@ -83,3 +83,16 @@ also be resumed after a build failure. To fetch newer upstream commits instead,
 start a fresh run without `-ResumeRun`.
 If installation fails after the push, the terminal reports the already-built
 installer path. The command does not launch T3 after installation.
+
+After a successful installation, automatic cleanup keeps the two newest successful
+update runs (including their installers) and the two newest validated version
+directories under `Downloads\T3Code-Fork`. The current run is always retained.
+Only runs recorded as successfully installed by this updater are eligible; failed,
+build-only, older unmarked, and locally modified runs remain available for recovery.
+Runs with saved Git work or ignored local configuration are also preserved.
+Cleanup prints what it removes and warns if Windows refuses a deletion. It never
+follows directory junctions into other locations. A lock prevents concurrent updater
+runs from building or cleaning each other's files.
+
+Keep the sibling `t3-update-cleanup.ps1` alongside `update-t3.ps1` when copying
+the command to another location.
