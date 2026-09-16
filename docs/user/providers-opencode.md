@@ -50,11 +50,7 @@ from the catalog. If OpenCode rejects that model, select an available one and re
 
 ## Delegating to OpenCode from another provider
 
-When a Claude, Codex, Cursor, or Grok thread runs `opencode run` through its shell
-tool, that run appears in **Agents** as a delegated agent while the command is
-running, and the thread shows as working in the sidebar. Add `--format json` to the
-command so T3 Code can also read the run's token usage, its final reply, and each
-native OpenCode subagent it spawned; those subagents appear alongside the run once
-the command finishes. A run whose prompt comes from a file or command substitution
-shows without a readable prompt, and a run started as a background shell command is
-not tracked.
+OpenCode can delegate to other installed providers, and other providers can delegate
+to OpenCode. Foreground provider commands appear in **Agents** while they run.
+See [delegating between providers](./thread-sidebar.md#delegating-between-providers)
+for supported commands and output formats.
