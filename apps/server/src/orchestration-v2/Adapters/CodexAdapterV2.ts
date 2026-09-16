@@ -2047,6 +2047,33 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             return [next, updated];
           });
 
+        const emitSubagentExecutionNode = (
+          subagent: CodexSubagentThreadContext,
+          status: OrchestrationV2ExecutionNode["status"],
+          completedAt: DateTime.Utc | null,
+        ) =>
+          emitProviderEvent({
+            type: "node.updated",
+            driver: CODEX_PROVIDER,
+            node: {
+              id: subagent.subagentNodeId,
+              threadId: subagent.parentContext.projectionThreadId,
+              runId: subagent.parentContext.projectionRunId,
+              parentNodeId: subagent.parentContext.itemParentNodeId,
+              rootNodeId: subagent.parentContext.rootNodeId,
+              kind: "subagent",
+              status,
+              countsForRun: false,
+              providerThreadId: subagent.providerThread.id,
+              providerTurnId: subagent.parentContext.providerTurnId,
+              nativeItemRef: subagent.task.nativeTaskRef,
+              runtimeRequestId: null,
+              checkpointScopeId: null,
+              startedAt: subagent.startedAt,
+              completedAt,
+            },
+          });
+
         const emitSubagentTaskUpdate = (input: {
           readonly subagent: CodexSubagentThreadContext;
           readonly status: OrchestrationV2Subagent["status"];
@@ -2068,6 +2095,36 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               completedAt,
               updatedAt: now,
             } satisfies OrchestrationV2Subagent;
+            // Before the first native turn, collaboration snapshots own the
+            // registration nodes. Native turn events own them after that.
+            if (
+              !(yield* Ref.get(nextProviderTurnOrdinals)).has(String(task.providerThreadId)) &&
+              (terminal || input.subagent.task.status !== task.status)
+            ) {
+              const subagent = input.subagent;
+              yield* emitSubagentExecutionNode(subagent, task.status, completedAt);
+              yield* emitProviderEvent({
+                type: "node.updated",
+                driver: CODEX_PROVIDER,
+                node: {
+                  id: subagent.childRootNodeId,
+                  threadId: subagent.childThreadId,
+                  runId: null,
+                  parentNodeId: null,
+                  rootNodeId: subagent.childRootNodeId,
+                  kind: "root_turn",
+                  status: task.status,
+                  countsForRun: false,
+                  providerThreadId: subagent.providerThread.id,
+                  providerTurnId: null,
+                  nativeItemRef: task.nativeTaskRef,
+                  runtimeRequestId: null,
+                  checkpointScopeId: null,
+                  startedAt: subagent.startedAt,
+                  completedAt,
+                },
+              });
+            }
             input.subagent.task = task;
 
             yield* emitProviderEvent({
@@ -2183,6 +2240,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               return updated;
             });
             if (subagent.task.status !== "running") {
+              yield* emitSubagentExecutionNode(subagent, "running", null);
               yield* emitSubagentTaskUpdate({
                 subagent,
                 status: "running",
