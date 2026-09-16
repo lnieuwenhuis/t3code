@@ -63,6 +63,14 @@ and package-cache access failures without granting the agent broader access. It 
 agent fails, reports uncertainty, or exceeds 30 minutes. Progress logs and a
 structured resolution report are retained with the checkout.
 
+If focused tests fail, the updater saves their output in the resolution attempt's
+`focused-tests.log` and gives Codex that log for up to two repair attempts.
+The original selected tests remain required, alongside any additional tests the
+agent selects. Repairs must preserve meaningful assertions and fix compatibility
+rather than weaken tests. Dependency installation, invalid paths, and agent failures
+stop immediately; only a failing test command triggers these retries. All tests
+still run on the host, and no changes are staged or published until they pass.
+
 After a successful build, a normal push updates **lnieuwenhuis/t3code main**,
 then the verified installer runs silently. This direct push is explicitly
 authorized for this personal updater. It never force-pushes: concurrent changes

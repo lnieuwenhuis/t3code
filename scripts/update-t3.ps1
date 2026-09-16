@@ -122,21 +122,34 @@ function Install-T3ResolutionDependencies {
 }
 
 function Invoke-T3ResolutionTests {
-    param([string]$Checkout, [string[]]$Files)
+    param([string]$Checkout, [string[]]$Files, [string]$LogPath)
     $groups = Get-T3TestPackages $Checkout $Files
     foreach ($packageRoot in $groups.Keys) {
         Push-Location $packageRoot
         try {
             # Package configs carry Windows Git setup and package-specific test projects.
             $testArguments = @($groups[$packageRoot] | Where-Object { $_ })
-            & vp test run @testArguments | Out-Host
-            if ($LASTEXITCODE) { throw "Focused merge-resolution tests failed in $packageRoot. Checkout preserved." }
+            $null = Get-Command vp -ErrorAction Stop
+            $previousPreference = $ErrorActionPreference
+            try {
+                # Native stderr contains normal test diagnostics on Windows PowerShell 5.1.
+                $ErrorActionPreference = 'Continue'
+                if ($LogPath) {
+                    & vp test run @testArguments 2>&1 | Tee-Object -FilePath $LogPath -Append -ErrorAction Stop | Out-Host
+                } else { & vp test run @testArguments 2>&1 | Out-Host }
+                $testExitCode = $LASTEXITCODE
+            } finally { $ErrorActionPreference = $previousPreference }
+            if ($testExitCode) {
+                $failure = [Exception]::new("Focused merge-resolution tests failed in $packageRoot. Checkout preserved.")
+                $failure.Data['T3FocusedTestFailure'] = $true
+                throw $failure
+            }
         } finally { Pop-Location }
     }
 }
 
 function Test-T3Resolution {
-    param([string]$Checkout, [string[]]$TestFiles)
+    param([string]$Checkout, [string[]]$TestFiles, [string]$LogPath)
     if ($TestFiles.Count -eq 0) { throw 'The resolver must identify focused test files before continuing.' }
     $prefix = [IO.Path]::GetFullPath($Checkout).TrimEnd('\') + '\'
     foreach ($file in $TestFiles) {
@@ -149,13 +162,11 @@ function Test-T3Resolution {
     }
     Write-Host 'Installing dependencies outside the Codex sandbox, then running focused resolution tests...'
     Install-T3ResolutionDependencies $Checkout $TestFiles
-    Invoke-T3ResolutionTests $Checkout $TestFiles
+    Invoke-T3ResolutionTests $Checkout $TestFiles $LogPath
 }
 
-function Resolve-T3Conflicts {
-    param([string]$Checkout)
-    $reportRoot = Join-Path (Split-Path $Checkout -Parent) ('resolution-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
-    New-Item -ItemType Directory -Path $reportRoot | Out-Null
+function Invoke-T3ResolutionAttempt {
+    param([string]$Checkout, [string]$ReportRoot, [string]$FeedbackLog, [string[]]$PreviousTestFiles)
     $schemaPath = Join-Path $reportRoot 'resolution-schema.json'
     $reportPath = Join-Path $reportRoot 'resolution.json'
     @'
@@ -182,6 +193,12 @@ Leave MERGE_HEAD and HEAD intact. Return status ready_for_tests only when workin
 are resolved and the semantic resolution is safe; unmerged index entries are EXPECTED until the updater stages.
 Otherwise return blocked with the exact reason. The updater will stage, commit, build, push and install.
 '@
+    if ($FeedbackLog) {
+        $prompt += "`nThe host focused tests failed. Read this log: $FeedbackLog`n"
+        $prompt += "Fix semantic source/test compatibility without weakening, deleting, skipping, or replacing assertions merely to pass.`n"
+        $prompt += "Preserve prior working-tree edits and new files. These original tests will still be required: `n"
+        $prompt += ($PreviousTestFiles -join "`n")
+    }
     $promptPath = Join-Path $reportRoot 'resolution-prompt.txt'
     $stdoutPath = Join-Path $reportRoot 'codex.stdout.log'
     $stderrPath = Join-Path $reportRoot 'codex.stderr.log'
@@ -214,8 +231,31 @@ Otherwise return blocked with the exact reason. The updater will stage, commit, 
     Write-Host $report.summary
     Write-Host $report.verification
     if ($report.status -ne 'ready_for_tests') { throw "Codex could not safely resolve the merge. See $reportPath" }
-    Test-T3Resolution -Checkout $Checkout -TestFiles @($report.testFiles)
-    foreach ($relativePath in $report.newFiles) {
+    return $report
+}
+
+function Resolve-T3Conflicts {
+    param([string]$Checkout)
+    $testFiles = @()
+    $newFiles = @()
+    $feedbackLog = $null
+    for ($attempt = 0; $attempt -lt 3; $attempt++) {
+        $reportRoot = Join-Path (Split-Path $Checkout -Parent) ('resolution-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $reportRoot | Out-Null
+        $report = Invoke-T3ResolutionAttempt -Checkout $Checkout -ReportRoot $reportRoot -FeedbackLog $feedbackLog -PreviousTestFiles $testFiles
+        $testFiles = @(@($testFiles) + @($report.testFiles) | Sort-Object -Unique)
+        $newFiles = @(@($newFiles) + @($report.newFiles) | Sort-Object -Unique)
+        $testLog = Join-Path $reportRoot 'focused-tests.log'
+        try {
+            Test-T3Resolution -Checkout $Checkout -TestFiles $testFiles -LogPath $testLog
+            break
+        } catch {
+            if (-not $_.Exception.Data['T3FocusedTestFailure'] -or $attempt -eq 2) { throw }
+            $feedbackLog = $testLog
+            Write-Host "Focused tests failed. Starting Codex repair $($attempt + 1)/2 with log: $feedbackLog"
+        }
+    }
+    foreach ($relativePath in $newFiles) {
         $fullPath = [IO.Path]::GetFullPath((Join-Path $Checkout $relativePath))
         $prefix = [IO.Path]::GetFullPath($Checkout).TrimEnd('\') + '\'
         if ([IO.Path]::IsPathRooted($relativePath) -or -not $fullPath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -or
