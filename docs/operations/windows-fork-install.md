@@ -56,8 +56,10 @@ Codex authenticated for `gpt-6-astra`, in addition to the build prerequisites.
 It clones the fork's `main` into a fresh run directory, fetches
 `pingdotgg/t3code`'s `main`, and merges upstream while retaining fork history.
 Conflicts are announced in the terminal, then delegated to Codex Astra at medium
-reasoning effort in a workspace-write sandbox. The agent edits source and runs
-targeted checks; the updater stages and validates the result. It stops if the
+reasoning effort in a workspace-write sandbox. The agent edits source and lists
+focused test files. The updater installs dependencies and runs those tests outside
+the sandbox, then stages and validates the result. This avoids sandbox network
+and package-cache access failures without granting the agent broader access. It stops if the
 agent fails, reports uncertainty, or exceeds 30 minutes. Progress logs and a
 structured resolution report are retained with the checkout.
 
@@ -72,5 +74,12 @@ application behavior; inspect the saved resolution report for consequential chan
 `update_t3 -BuildOnly` performs the local merge and build without pushing or
 installing. `update_t3 -Help` prints usage. Run directories and artifacts remain
 under `Documents\GitHub\t3code-updates`; failed runs are preserved for inspection.
+Resume one with `update_t3 -ResumeRun <run-directory>` (optionally `-BuildOnly`).
+Resume keeps the original upstream snapshot and existing resolutions, validates
+the checkout's remotes and task branch, and rechecks the result before publishing.
+Each resolution attempt and build gets its own output directory, preserving old
+reports and preventing stale installer selection. A completed local merge can
+also be resumed after a build failure. To fetch newer upstream commits instead,
+start a fresh run without `-ResumeRun`.
 If installation fails after the push, the terminal reports the already-built
 installer path. The command does not launch T3 after installation.

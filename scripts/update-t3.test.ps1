@@ -1,6 +1,8 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'update-t3.ps1')
+$realDependencyInstall = ${function:Install-T3ResolutionDependencies}
+$realTestRunner = ${function:Invoke-T3ResolutionTests}
 
 $root = Join-Path $env:TEMP ('t3-sync-test-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $root | Out-Null
@@ -62,6 +64,48 @@ try {
 } catch { $failed = $_.Exception.Message -match 'conflict|unresolved' }
 Assert $failed 'Unresolved conflicts were accepted'
 
+# Resume a stopped merge in place instead of cloning over the preserved work.
+$resumePath = Join-Path $root 'unresolved'
+Set-Content (Join-Path $resumePath 'feature.txt') 'preserved fork and upstream resolution'
+Sync-T3Source -ForkUrl $fork -UpstreamUrl $upstream -Checkout $resumePath -Resume -ResolveConflicts {
+    param($path)
+    Assert ((Get-Content (Join-Path $path 'feature.txt')) -eq 'preserved fork and upstream resolution') 'Resume discarded existing resolution'
+} -Verify { }
+Assert (-not (& git -C $resumePath ls-files -u)) 'Resume did not finish the merge'
+$resumedCommit = & git -C $resumePath rev-parse HEAD
+Sync-T3Source -ForkUrl $fork -UpstreamUrl $upstream -Checkout $resumePath -Resume -ResolveConflicts { throw 'Completed merge must not resolve again' } -Verify { }
+Assert ((& git -C $resumePath rev-parse HEAD) -eq $resumedCommit) 'Completed resume changed revision'
+$failed = $false
+try { Sync-T3Source -ForkUrl 'wrong-target' -UpstreamUrl $upstream -Checkout $resumePath -Resume -ResolveConflicts { } -Verify { } } catch { $failed = $_.Exception.Message -match 'remote does not match' }
+Assert $failed 'Resume accepted another repository'
+
+# Tests execute in the parent, after dependency installation, and failures propagate.
+$script:resolutionSteps = @()
+function Install-T3ResolutionDependencies { param($Checkout) $script:resolutionSteps += 'dependencies' }
+function Invoke-T3ResolutionTests { param($Checkout, $Files) $script:resolutionSteps += 'tests'; throw 'Fixture focused test failure' }
+Set-Content (Join-Path $resumePath 'feature.test.ts') '// fixture'
+$failed = $false
+try { Test-T3Resolution -Checkout $resumePath -TestFiles @('feature.test.ts') } catch { $failed = $_.Exception.Message -eq 'Fixture focused test failure' }
+Assert $failed 'Parent test failure was ignored'
+Assert (($script:resolutionSteps -join ',') -eq 'dependencies,tests') 'Dependency/test ordering was wrong'
+$failed = $false
+try { Test-T3Resolution -Checkout $resumePath -TestFiles @('../outside.test.ts') } catch { $failed = $_.Exception.Message -match 'Invalid test file' }
+Assert $failed 'Test path outside checkout was accepted'
+
+# Preserve owning-package configuration and install dependencies for every selected package.
+$mobileRoot = Join-Path $resumePath 'apps/mobile'
+New-Item -ItemType Directory -Path (Join-Path $mobileRoot 'src/nested') -Force | Out-Null
+Set-Content (Join-Path $mobileRoot 'package.json') '{"name":"@fixture/mobile"}'
+Set-Content (Join-Path $mobileRoot 'src/nested/example.test.ts') '// fixture'
+$script:vpCalls = @()
+function vp { $script:vpCalls += [pscustomobject]@{ Args = @($args); Directory = $PWD.Path }; $global:LASTEXITCODE = 0 }
+& $realDependencyInstall $resumePath @('apps/mobile/src/nested/example.test.ts')
+Assert ($script:vpCalls[0].Args -contains '--filter=@fixture/mobile...') 'Test workspace dependencies omitted'
+& $realTestRunner $resumePath @('apps/mobile/src/nested/example.test.ts')
+Assert ($script:vpCalls[1].Directory -eq $mobileRoot) 'Test used root configuration instead of package configuration'
+Assert ($script:vpCalls[1].Args -contains 'src\nested\example.test.ts') 'Test path was not package-relative'
+Remove-Item Function:\vp
+
 # Publishing must reject a fork that advanced while verification was running.
 $resolve = { param($path) Set-Content (Join-Path $path 'feature.txt') 'fork customization plus upstream improvement' }
 $failed = $false
@@ -88,4 +132,4 @@ Set-Content -LiteralPath (Join-Path $root 'clean/a.txt') 'unrelated file'
 Invoke-T3Git (Join-Path $root 'clean') @('--literal-pathspecs', 'add', '--', '[ab].txt')
 $staged = @(& git -C (Join-Path $root 'clean') diff --cached --name-only)
 Assert ($staged.Count -eq 1 -and $staged[0] -eq '[ab].txt') 'Explicit filename expanded as wildcard'
-Write-Host "PASS: clean merge, publish, failed verification, conflict resolution, build-only, unresolved refusal, concurrent push refusal, verification mutation refusal, literal file staging. Fixtures: $root"
+Write-Host "PASS: merge/publish safeguards, pending/completed resume, resume target validation, dependency/test ordering, parent test failures, test path validation, package dependency filters and test configuration, literal file staging. Fixtures: $root"
