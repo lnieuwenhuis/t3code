@@ -8,6 +8,7 @@ import {
   OrchestrationV2DomainEventJson,
   OrchestrationV2StoredEvent,
   ProjectId,
+  ProjectIconOverride,
   ThreadId,
   type OrchestrationV2DomainEvent,
 } from "@t3tools/contracts";
@@ -39,6 +40,7 @@ import {
   type OrchestrationEventStoreShape,
 } from "../Services/OrchestrationEventStore.ts";
 
+const encodeProjectIcon = Schema.encodeSync(ProjectIconOverride);
 const decodeEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
 const decodeProjectEvent = Schema.decodeUnknownEffect(ApplicationProjectEvent);
 const UnknownFromJsonString = Schema.fromJsonString(Schema.Unknown);
@@ -301,7 +303,10 @@ const makeEventStore = Effect.gen(function* () {
       actorKind: inferActorKind(event),
       occurredAt: event.occurredAt,
       commandId: event.commandId,
-      payloadJson: event.payload,
+      payloadJson:
+        "projectIcon" in event.payload && event.payload.projectIcon
+          ? { ...event.payload, projectIcon: encodeProjectIcon(event.payload.projectIcon) }
+          : event.payload,
       metadataJson: event.metadata,
       applicationEventVersion: event.aggregateKind === "project" ? 2 : 1,
     }).pipe(
