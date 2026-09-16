@@ -45,3 +45,32 @@ is next launched; the installer is not a backup or a data migration tool.
 
 This build targets the native Windows backend. It does not bundle the Linux
 node-pty prebuild needed for the optional WSL backend.
+
+## One-command upstream update
+
+The locally installed `update_t3` command runs `scripts/update-t3.ps1` with the
+sibling installer and `t3-conflict-worker.ps1`. Close T3 first and run it from an
+external terminal. It requires GitHub CLI authenticated as `lnieuwenhuis` and
+Codex authenticated for `gpt-6-astra`, in addition to the build prerequisites.
+
+It clones the fork's `main` into a fresh run directory, fetches
+`pingdotgg/t3code`'s `main`, and merges upstream while retaining fork history.
+Conflicts are announced in the terminal, then delegated to Codex Astra at medium
+reasoning effort in a workspace-write sandbox. The agent edits source and runs
+targeted checks; the updater stages and validates the result. It stops if the
+agent fails, reports uncertainty, or exceeds 30 minutes. Progress logs and a
+structured resolution report are retained with the checkout.
+
+After a successful build, a normal push updates **lnieuwenhuis/t3code main**,
+then the verified installer runs silently. This direct push is explicitly
+authorized for this personal updater. It never force-pushes: concurrent changes
+to the fork can reject the push and stop installation. Branch protection or
+authentication errors also stop the run; they are not bypassed. Rerun to merge
+a fresh snapshot. Automated resolution and build success do not prove every
+application behavior; inspect the saved resolution report for consequential changes.
+
+`update_t3 -BuildOnly` performs the local merge and build without pushing or
+installing. `update_t3 -Help` prints usage. Run directories and artifacts remain
+under `Documents\GitHub\t3code-updates`; failed runs are preserved for inspection.
+If installation fails after the push, the terminal reports the already-built
+installer path. The command does not launch T3 after installation.
