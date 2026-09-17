@@ -1,3 +1,4 @@
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
@@ -485,7 +486,11 @@ describe("ClaudeAdapterLive", () => {
       assert.deepEqual(createInput?.options.systemPrompt, {
         type: "preset",
         preset: "claude_code",
-        append: buildRuntimeInstructions({ harness: "Claude Code" }),
+        append: buildRuntimeInstructions({
+          harness: "Claude Code",
+          platform: HostProcessPlatform.defaultValue(),
+          runtimeMode: "full-access",
+        }),
       });
       assert.equal(createInput?.options.permissionMode, "bypassPermissions");
       assert.equal(createInput?.options.allowDangerouslySkipPermissions, true);

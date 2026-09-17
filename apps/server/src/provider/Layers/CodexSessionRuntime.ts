@@ -18,6 +18,7 @@ import {
   TurnId,
 } from "@t3tools/contracts";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -581,6 +582,8 @@ function runtimeModeToTurnSandboxPolicy(
 }
 
 function buildCodexCollaborationMode(input: {
+  readonly runtimeMode: RuntimeMode;
+  readonly platform?: NodeJS.Platform | undefined;
   readonly interactionMode?: ProviderInteractionMode;
   readonly model?: string;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort;
@@ -598,7 +601,7 @@ function buildCodexCollaborationMode(input: {
       reasoning_effort: reasoningEffort,
       developer_instructions: buildCodexDeveloperInstructions(
         input.interactionMode,
-        { model, reasoningEffort },
+        { model, reasoningEffort, runtimeMode: input.runtimeMode, platform: input.platform },
         input.browserToolsAvailable ?? true,
       ),
     },
@@ -612,6 +615,7 @@ const SKILL_MENTION_PATTERN =
 export function buildTurnStartParams(input: {
   readonly threadId: string;
   readonly runtimeMode: RuntimeMode;
+  readonly platform?: NodeJS.Platform | undefined;
   readonly prompt?: string;
   readonly attachments?: ReadonlyArray<{
     readonly type: "image";
@@ -640,6 +644,8 @@ export function buildTurnStartParams(input: {
 
   const config = runtimeModeToThreadConfig(input.runtimeMode);
   const collaborationMode = buildCodexCollaborationMode({
+    runtimeMode: input.runtimeMode,
+    platform: input.platform,
     ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
     ...(input.model ? { model: input.model } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
@@ -2472,6 +2478,7 @@ export const makeCodexSessionRuntime = (
           const params = yield* buildTurnStartParams({
             threadId: providerThreadId,
             runtimeMode: options.runtimeMode,
+            platform: yield* HostProcessPlatform,
             ...(input.input ? { prompt: input.input } : {}),
             ...(input.attachments ? { attachments: input.attachments } : {}),
             ...(normalizedModel ? { model: normalizedModel } : {}),

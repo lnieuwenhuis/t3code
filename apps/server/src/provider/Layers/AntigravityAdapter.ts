@@ -1,3 +1,4 @@
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import {
   ApprovalRequestId,
   EventId,
@@ -1085,7 +1086,12 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
                   ...prompt,
                   {
                     type: "text",
-                    text: buildRuntimeInstructions({ harness: "Antigravity", model }),
+                    text: buildRuntimeInstructions({
+                      harness: "Antigravity",
+                      platform: yield* HostProcessPlatform,
+                      model,
+                      runtimeMode: context.session.runtimeMode,
+                    }),
                   },
                 ],
               },

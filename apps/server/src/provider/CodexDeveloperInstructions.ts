@@ -1,4 +1,4 @@
-import type { ProviderInteractionMode } from "@t3tools/contracts";
+import type { ProviderInteractionMode, RuntimeMode } from "@t3tools/contracts";
 import { buildRuntimeInstructions } from "./RuntimeInstructions.ts";
 
 const T3_CODE_BROWSER_TOOL_INSTRUCTIONS = `
@@ -195,6 +195,8 @@ ${browserToolInstructions(browserToolsAvailable)}
 export interface CodexRuntimeInfo {
   readonly model: string;
   readonly reasoningEffort: string;
+  readonly runtimeMode?: RuntimeMode | undefined;
+  readonly platform?: NodeJS.Platform | undefined;
 }
 
 export function buildCodexDeveloperInstructions(

@@ -1,3 +1,4 @@
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import {
   EventId,
   type OpenCodeSettings,
@@ -945,6 +946,7 @@ export function makeOpenCodeAdapter(
   return Effect.gen(function* () {
     const boundInstanceId = options?.instanceId ?? ProviderInstanceId.make("opencode");
     const serverConfig = yield* ServerConfig;
+    const hostPlatform = yield* HostProcessPlatform;
     const openCodeRuntime = yield* OpenCodeRuntime;
     const crypto = yield* Crypto.Crypto;
     const fileSystem = yield* FileSystem.FileSystem;
@@ -3282,6 +3284,8 @@ export function makeOpenCodeAdapter(
                     // OpenCode appends this after its own agent/provider prompts.
                     system: buildRuntimeInstructions({
                       harness: "OpenCode",
+                      platform: hostPlatform,
+                      runtimeMode: context.session.runtimeMode,
                       model: `${parsedModel.providerID}/${parsedModel.modelID}`,
                     }),
                     parts: [...(text ? [{ type: "text" as const, text }] : []), ...fileParts],

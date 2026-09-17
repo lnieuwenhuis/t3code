@@ -1,3 +1,4 @@
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 // @effect-diagnostics nodeBuiltinImport:off
 /**
  * ClaudeAdapterLive - Scoped live implementation for the Claude Agent provider adapter.
@@ -5041,7 +5042,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           type: "preset",
           preset: "claude_code",
           // Model and effort can change after this session-level prompt is set.
-          append: buildRuntimeInstructions({ harness: "Claude Code" }),
+          append: buildRuntimeInstructions({
+            harness: "Claude Code",
+            platform: yield* HostProcessPlatform,
+            runtimeMode: input.runtimeMode,
+          }),
         },
         settingSources: [...CLAUDE_SETTING_SOURCES],
         // `ultracode` is a Claude Code setting, not an API effort level. It is

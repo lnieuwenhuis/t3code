@@ -1,3 +1,4 @@
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as NodeAssert from "node:assert/strict";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
@@ -1709,7 +1710,12 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       NodeAssert.deepEqual(prompt.parts, [{ type: "text", text: "/unknown explain this" }]);
       NodeAssert.equal(
         prompt.system,
-        buildRuntimeInstructions({ harness: "OpenCode", model: "openai/gpt-5" }),
+        buildRuntimeInstructions({
+          harness: "OpenCode",
+          platform: HostProcessPlatform.defaultValue(),
+          model: "openai/gpt-5",
+          runtimeMode: "full-access",
+        }),
       );
       yield* adapter.stopSession(threadId);
     }),
@@ -6537,7 +6543,9 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         variant: "high",
         system: buildRuntimeInstructions({
           harness: "OpenCode",
+          platform: HostProcessPlatform.defaultValue(),
           model: "anthropic/claude-sonnet-4-5",
+          runtimeMode: "full-access",
         }),
         parts: [{ type: "text", text: "Fix it" }],
       });
@@ -6593,7 +6601,9 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         },
         system: buildRuntimeInstructions({
           harness: "OpenCode",
+          platform: HostProcessPlatform.defaultValue(),
           model: "anthropic/claude-sonnet-4-5",
+          runtimeMode: "full-access",
         }),
         parts: [{ type: "text", text: "Fix it" }],
       });

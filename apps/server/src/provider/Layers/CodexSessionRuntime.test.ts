@@ -232,6 +232,7 @@ describe("buildTurnStartParams", () => {
           developer_instructions: buildCodexDeveloperInstructions("plan", {
             model: "gpt-5.3-codex",
             reasoningEffort: "medium",
+            runtimeMode: "full-access",
           }),
         },
       },
@@ -557,6 +558,31 @@ describe("Codex MCP elicitation approvals", () => {
 });
 
 describe("buildCodexDeveloperInstructions", () => {
+  it.effect(
+    "uses the current turn permission mode for delegated OpenCode launch instructions",
+    () =>
+      Effect.gen(function* () {
+        for (const runtimeMode of [
+          "full-access",
+          "approval-required",
+          "auto-accept-edits",
+          "auto",
+        ] as const) {
+          const params = yield* buildTurnStartParams({
+            threadId: "provider-thread-1",
+            runtimeMode,
+            prompt: "Delegate the task",
+            interactionMode: "default",
+          });
+          const instructions = params.collaborationMode?.settings.developer_instructions ?? "";
+          NodeAssert.equal(
+            instructions.includes("opencode run --auto --format json"),
+            runtimeMode === "full-access",
+          );
+        }
+      }),
+  );
+
   it("appends runtime info after the mode instructions", () => {
     const instructions = buildCodexDeveloperInstructions("default", {
       model: "gpt-5.3-codex",

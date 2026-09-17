@@ -1,3 +1,4 @@
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 /**
  * CursorAdapterLive — Cursor CLI (`agent acp`) via ACP.
  *
@@ -1097,7 +1098,12 @@ export function makeCursorAdapter(
                     ...promptParts,
                     {
                       type: "text",
-                      text: buildRuntimeInstructions({ harness: "Cursor", model: resolvedModel }),
+                      text: buildRuntimeInstructions({
+                        harness: "Cursor",
+                        platform: yield* HostProcessPlatform,
+                        model: resolvedModel,
+                        runtimeMode: ctx.session.runtimeMode,
+                      }),
                     },
                   ],
             })

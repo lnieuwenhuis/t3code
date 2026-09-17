@@ -161,3 +161,20 @@ tracked this way. File-based or dynamically constructed prompts may appear witho
 a readable task description. Install and authenticate the child provider on the
 machine where the shell command runs; the parent provider's session does not supply
 the child's credentials or permission settings.
+
+T3 gives agents launch guidance for unattended OpenCode workers. In **Full Access**,
+that guidance uses OpenCode's supported `--auto` mode, which keeps explicit denies.
+Other permission modes do not authorize auto-approval. This is guidance to the
+agent, not interception of shell commands or a permission bridge: an independently
+launched CLI still owns its approvals. Older OpenCode versions must be checked for
+flag support before use.
+
+When continuing an OpenCode worker, keep its original session directory. Changing
+the working directory does not move an existing session and can leave permission
+requests waiting without visible output. Put a prompt before `--file` when attaching
+files, so OpenCode does not interpret the prompt as another filename.
+
+On Windows, local test servers should use an application-supported loopback bind
+address and a bounded start/test/stop lifecycle. A newly built executable may cause
+a Windows Firewall prompt, especially when its path changes between worktrees.
+Full Access does not answer Windows Firewall or administrator-elevation prompts.

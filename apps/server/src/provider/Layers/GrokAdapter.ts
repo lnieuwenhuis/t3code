@@ -1645,6 +1645,8 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                   ? undefined
                   : buildRuntimeInstructions({
                       harness: "Grok",
+                      runtimeMode: ctx.session.runtimeMode,
+                      platform: hostPlatform,
                       model: displayModel,
                       reasoningEffort: normalizeGrokReasoningEffort(requestedTurnReasoningEffort),
                     });
