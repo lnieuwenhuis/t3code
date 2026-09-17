@@ -13,3 +13,9 @@ export function wasBootstrapThreadDeleted(error: unknown): boolean {
 }
 
 export const isOrchestrationThreadNotFoundError = Schema.is(OrchestrationThreadNotFoundError);
+
+export function wasBootstrapThreadNotCreated(error: unknown): boolean {
+  return (
+    isOrchestrationDispatchCommandError(error) && error.bootstrapThreadDisposition === "not-created"
+  );
+}

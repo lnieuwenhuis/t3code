@@ -6,7 +6,11 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
-import { wasBootstrapThreadDeleted, isOrchestrationThreadNotFoundError } from "./orchestration.ts";
+import {
+  wasBootstrapThreadDeleted,
+  wasBootstrapThreadNotCreated,
+  isOrchestrationThreadNotFoundError,
+} from "./orchestration.ts";
 
 describe("isOrchestrationThreadNotFoundError", () => {
   it("matches the typed not-found error", () => {
@@ -73,5 +77,32 @@ describe("wasBootstrapThreadDeleted", () => {
 
   it("rejects unrelated errors", () => {
     expect(wasBootstrapThreadDeleted(new Error("connection lost"))).toBe(false);
+  });
+});
+
+describe("wasBootstrapThreadNotCreated", () => {
+  it("accepts only a confirmed never-created bootstrap thread", () => {
+    const notCreated = new OrchestrationDispatchCommandError({
+      message: "A separate worktree requires a base commit.",
+      bootstrapThreadDisposition: "not-created",
+    });
+    expect(wasBootstrapThreadNotCreated(notCreated)).toBe(true);
+    expect(wasBootstrapThreadDeleted(notCreated)).toBe(false);
+    expect(
+      wasBootstrapThreadNotCreated(
+        new OrchestrationDispatchCommandError({
+          message: "Failed to create worktree.",
+          bootstrapThreadDisposition: "deleted",
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      wasBootstrapThreadNotCreated(
+        new OrchestrationDispatchCommandError({
+          message: "Failed to create worktree.",
+        }),
+      ),
+    ).toBe(false);
+    expect(wasBootstrapThreadNotCreated(new Error("connection lost"))).toBe(false);
   });
 });
