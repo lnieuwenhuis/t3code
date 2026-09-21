@@ -6,7 +6,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
-const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })));
 
 layer("053_ProjectionTurnsAssistantMessageIndex", (it) => {
   it.effect("indexes correlated canonical assistant lookups", () =>
@@ -71,6 +71,25 @@ layer("053_ProjectionTurnsAssistantMessageIndex", (it) => {
       );
       assert.ok(plan.every((step) => !step.detail.includes("SCAN turns")));
       assert.ok(plan.every((step) => !step.detail.includes("LIST SUBQUERY")));
+
+      // An installed fork already records migration 53. Upstream's independently
+      // numbered migration must still run without replacing the assistant index.
+      assert.deepStrictEqual(yield* runMigrations(), [[54, "PullRequestFilesViewed"]]);
+      yield* sql`
+        INSERT INTO pull_request_files_viewed
+          (provider, host, repository, number, viewer, path, revision, viewed_at)
+        VALUES ('github', 'github.com', 'owner/repo', 1, 'reader', 'file.ts', 'rev', 'now')
+      `;
+      assert.deepStrictEqual(yield* runMigrations(), []);
+      const viewed = yield* sql<{ readonly path: string; readonly revision: string }>`
+        SELECT path, revision FROM pull_request_files_viewed
+      `;
+      assert.deepStrictEqual(viewed, [{ path: "file.ts", revision: "rev" }]);
+      const retainedIndex = yield* sql<{ readonly name: string }>`
+        SELECT name FROM sqlite_master
+        WHERE type = 'index' AND name = 'idx_projection_turns_assistant_message_id'
+      `;
+      assert.equal(retainedIndex.length, 1);
     }),
   );
 });
