@@ -275,6 +275,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/appearance",
   },
   {
+    id: "sidebar-usage-limits",
+    title: "Usage limits in sidebar",
+    to: "/settings/general",
+    searchTerms: ["quota remaining rate limit codex claude footer subscription"],
+  },
+  {
     id: "project-grouping",
     title: "Project grouping",
     to: "/settings/general",

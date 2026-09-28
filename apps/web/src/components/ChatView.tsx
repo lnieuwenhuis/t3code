@@ -1,3 +1,5 @@
+import { usePendingUserInputDraft } from "./chat/usePendingUserInputDraft";
+import { pendingUserInputRequestKey, resolveBranchAfterEnvModeChange } from "./ChatView.logic";
 import { ChatCanvas } from "./chat/ChatCanvas";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
 import {
@@ -192,7 +194,6 @@ import {
 } from "./chat/timelineScrollAnchoring";
 import {
   buildPendingUserInputAnswers,
-  carryDisplacedCustomAnswerIntoPrompt,
   derivePendingUserInputProgress,
   setPendingUserInputCustomAnswer,
   togglePendingUserInputOptionSelection,
@@ -3168,11 +3169,17 @@ export default function ChatView(props: ChatViewProps) {
     [pendingRequests.userInputs],
   );
   const activePendingUserInput = pendingUserInputs[0] ?? null;
-  const activePendingRequestKey = JSON.stringify([
-    environmentId,
-    activeThreadId,
-    activePendingUserInput?.requestId,
-  ]);
+  const activePendingRequestKey = pendingUserInputRequestKey(
+    composerDraftTarget,
+    activePendingUserInput?.requestId ?? null,
+  );
+  const { returnQuestionTextToComposerDraft, beginSubmission: beginPendingUserInputSubmission } =
+    usePendingUserInputDraft({
+      composerDraftTarget,
+      activePendingUserInput,
+      pendingUserInputAnswersByRequestId,
+      setPendingUserInputAnswersByRequestId,
+    });
   const pendingQuestionDraftKeys = useMemo(
     () =>
       activeThreadId
@@ -9436,6 +9443,7 @@ export default function ChatView(props: ChatViewProps) {
         );
       }
       userInputResponsesInFlight.current.add(responseKey);
+      const restoreFailedSubmission = beginPendingUserInputSubmission(requestId);
 
       setRespondingUserInputRequestIds((existing) =>
         existing.includes(requestId) ? existing : [...existing, requestId],
@@ -9451,18 +9459,28 @@ export default function ChatView(props: ChatViewProps) {
             : {}),
         },
       });
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
-        setThreadError(
-          activeThreadId,
-          error instanceof Error ? error.message : "Failed to submit user input.",
-        );
+      if (result._tag === "Failure") {
+        restoreFailedSubmission();
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          setThreadError(
+            activeThreadId,
+            error instanceof Error ? error.message : "Failed to submit user input.",
+          );
+        }
       }
       userInputResponsesInFlight.current.delete(responseKey);
       setRespondingUserInputRequestIds((existing) => existing.filter((id) => id !== requestId));
       return result;
     },
-    [activeThreadId, environmentId, pendingUserInputs, respondToThreadUserInput, setThreadError],
+    [
+      activeThreadId,
+      beginPendingUserInputSubmission,
+      environmentId,
+      pendingUserInputs,
+      respondToThreadUserInput,
+      setThreadError,
+    ],
   );
 
   // Closes an async question without messaging the agent. The server records
@@ -9509,16 +9527,12 @@ export default function ChatView(props: ChatViewProps) {
       if (!activePendingUserInput) {
         return;
       }
-      // The option replaces the custom answer. Anything typed there is the
-      // user's text, so it goes back to the thread draft instead of vanishing.
-      const displacedAnswer =
-        pendingUserInputAnswersByRequestId[activePendingRequestKey]?.[questionId]?.customAnswer;
-      const currentPrompt =
-        useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.prompt ?? "";
-      const nextPrompt = carryDisplacedCustomAnswerIntoPrompt(currentPrompt, displacedAnswer);
-      if (nextPrompt !== currentPrompt) {
-        setComposerDraftPrompt(composerDraftTarget, nextPrompt);
-      }
+      // Return displaced text without consuming the other questions' pending answers.
+      returnQuestionTextToComposerDraft(
+        activePendingUserInput.requestId,
+        activePendingDraftAnswers[questionId]?.customAnswer ?? "",
+        composerDraftTarget,
+      );
       setPendingUserInputAnswersByRequestId((existing) => {
         const question =
           (activePendingProgress?.activeQuestion?.id === questionId
@@ -9550,8 +9564,8 @@ export default function ChatView(props: ChatViewProps) {
       activePendingRequestKey,
       composerDraftTarget,
       composerRef,
-      pendingUserInputAnswersByRequestId,
-      setComposerDraftPrompt,
+      activePendingDraftAnswers,
+      returnQuestionTextToComposerDraft,
     ],
   );
 
@@ -10036,14 +10050,21 @@ export default function ChatView(props: ChatViewProps) {
   const onEnvModeChange = useCallback(
     (mode: DraftThreadEnvMode) => {
       if (multipleModelSelections !== null) return;
+      const nextBranch = resolveBranchAfterEnvModeChange({
+        currentMode: envMode,
+        nextMode: mode,
+        currentBranch: activeThreadBranch,
+      });
       if (canOverrideServerThreadEnvMode) {
         setPendingServerThreadEnvMode(mode);
+        if (nextBranch !== activeThreadBranch) setPendingServerThreadBranch(nextBranch);
         scheduleComposerFocus();
         return;
       }
       if (isLocalDraftThread) {
         setDraftThreadContext(composerDraftTarget, {
           envMode: mode,
+          ...(nextBranch !== activeThreadBranch ? { branch: nextBranch } : {}),
           startFromOrigin: resolveNewDraftStartFromOrigin({
             envMode: mode,
             newWorktreesStartFromOrigin: activeProjectSettings.settings.newWorktreesStartFromOrigin,
@@ -10054,6 +10075,9 @@ export default function ChatView(props: ChatViewProps) {
       scheduleComposerFocus();
     },
     [
+      activeThreadBranch,
+      envMode,
+      setPendingServerThreadBranch,
       canOverrideServerThreadEnvMode,
       composerDraftTarget,
       draftThread?.worktreePath,

@@ -7,6 +7,7 @@ import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 
 import {
+  GitCommandError,
   SourceControlRepositoryError,
   type SourceControlCloneRepositoryInput,
   type SourceControlCloneRepositoryResult,
@@ -19,6 +20,11 @@ import {
   type SourceControlRepositoryLookupInput,
 } from "@t3tools/contracts";
 
+import {
+  detectSourceControlProviderFromRemoteUrl,
+  isSshRemoteUrl,
+} from "@t3tools/shared/sourceControl";
+
 import { ServerConfig } from "../config.ts";
 import { expandHomePathWith } from "../pathExpansion.ts";
 import {
@@ -28,6 +34,44 @@ import {
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as SourceControlProviderRegistry from "./SourceControlProviderRegistry.ts";
 const isSourceControlRepositoryError = Schema.is(SourceControlRepositoryError);
+
+function cloneFailureDetail(stderr: string, remoteUrl?: string | null): string {
+  if (/host key verification failed/iu.test(stderr)) {
+    return "SSH could not verify the source control host. Add its host key to known_hosts and try again.";
+  }
+  if (
+    /permission denied \(publickey(?:,[^)]+)?\)|public key authentication failed/iu.test(stderr)
+  ) {
+    return "SSH authentication failed. Add an SSH key to your source control account and try again.";
+  }
+  if (
+    /http basic: access denied|could not read username|terminal prompts disabled/iu.test(stderr)
+  ) {
+    return "HTTPS authentication failed. Configure Git credentials for the source control host and try again.";
+  }
+  if (/authentication failed/iu.test(stderr)) {
+    if (remoteUrl && isSshRemoteUrl(remoteUrl)) {
+      return "SSH authentication failed. Add an SSH key to your source control account and try again.";
+    }
+    if (remoteUrl && /^https?:\/\//iu.test(remoteUrl)) {
+      return "HTTPS authentication failed. Configure Git credentials for the source control host and try again.";
+    }
+    return "Git authentication failed. Check the credentials configured for this remote and try again.";
+  }
+  if (/could not resolve (?:host|hostname)/iu.test(stderr)) {
+    return "The source control host could not be resolved. Check your network or VPN connection and try again.";
+  }
+  if (/connection (?:timed out|refused)|operation timed out|failed to connect/iu.test(stderr)) {
+    return "Git could not connect to the source control host. Check your network or VPN connection and try again.";
+  }
+  if (/repository not found|could not read from remote repository/iu.test(stderr)) {
+    return "The repository could not be read. Check that it exists and that your Git credentials have access.";
+  }
+
+  return stderr.trim()
+    ? redactUrlCredentials(stderr.trim())
+    : "Git could not clone the repository. Verify that the remote works in a terminal and try again.";
+}
 
 export class SourceControlRepositoryService extends Context.Service<
   SourceControlRepositoryService,
@@ -194,12 +238,12 @@ export const make = Effect.gen(function* () {
   });
 
   const normalizeDestinationPath = Effect.fn("SourceControlRepositoryService.normalizeDestination")(
-    function* (destinationPath: string) {
+    function* (destinationPath: string, provider: SourceControlProviderKind) {
       const trimmed = destinationPath.trim();
       if (trimmed.length === 0) {
         return yield* new SourceControlRepositoryError({
           operation: "cloneRepository",
-          provider: "unknown",
+          provider,
           detail: "Choose a destination path before cloning.",
         });
       }
@@ -209,8 +253,8 @@ export const make = Effect.gen(function* () {
   );
 
   const prepareDestination = Effect.fn("SourceControlRepositoryService.prepareDestination")(
-    function* (destinationPath: string) {
-      const normalizedDestination = yield* normalizeDestinationPath(destinationPath);
+    function* (destinationPath: string, provider: SourceControlProviderKind) {
+      const normalizedDestination = yield* normalizeDestinationPath(destinationPath, provider);
       if (yield* fileSystem.exists(normalizedDestination)) {
         const entries = yield* fileSystem
           .readDirectory(normalizedDestination, { recursive: false })
@@ -219,7 +263,7 @@ export const make = Effect.gen(function* () {
               (cause) =>
                 new SourceControlRepositoryError({
                   operation: "cloneRepository",
-                  provider: "unknown",
+                  provider,
                   detail: "Destination path already exists and is not a directory.",
                   cause,
                 }),
@@ -228,7 +272,7 @@ export const make = Effect.gen(function* () {
         if (entries.length > 0) {
           return yield* new SourceControlRepositoryError({
             operation: "cloneRepository",
-            provider: "unknown",
+            provider,
             detail: "Destination path already exists and is not empty.",
           });
         }
@@ -247,10 +291,15 @@ export const make = Effect.gen(function* () {
   const prepareClone = Effect.fn("SourceControlRepositoryService.prepareClone")(function* (
     input: SourceControlCloneRepositoryInput,
   ) {
-    const preparedDestination = yield* prepareDestination(input.destinationPath);
     let repository: SourceControlRepositoryInfo | null = null;
     let remoteUrl = input.remoteUrl?.trim() ?? null;
-    let provider: SourceControlProviderKind = input.provider ?? "unknown";
+    let provider: SourceControlProviderKind =
+      input.provider ??
+      (remoteUrl ? detectSourceControlProviderFromRemoteUrl(remoteUrl)?.kind : null) ??
+      "unknown";
+    const preparedDestination = yield* prepareDestination(input.destinationPath, provider).pipe(
+      mapRepositoryError("cloneRepository", provider),
+    );
 
     if (input.provider && input.repository) {
       repository = yield* lookupRepository({
@@ -299,7 +348,12 @@ export const make = Effect.gen(function* () {
         if (stderrTail.length > 4) stderrTail.shift();
       });
     };
-    yield* git
+    const provider =
+      input.provider ??
+      prepared.repository?.provider ??
+      detectSourceControlProviderFromRemoteUrl(prepared.cloneUrl)?.kind ??
+      "unknown";
+    const cloneResult = yield* git
       .execute({
         operation: "SourceControlRepositoryService.cloneRepository",
         cwd: path.dirname(prepared.destinationPath),
@@ -311,6 +365,7 @@ export const make = Effect.gen(function* () {
         maxOutputBytes: 256 * 1024,
         appendTruncationMarker: true,
         keepLineCallbacksAfterTruncation: true,
+        allowNonZeroExit: true,
         env: CLONE_ENV,
         progress: { onStderrLine },
       })
@@ -319,15 +374,30 @@ export const make = Effect.gen(function* () {
           (cause) =>
             new SourceControlRepositoryError({
               operation: "cloneRepository",
-              provider: input.provider ?? "unknown",
-              detail:
-                stderrTail.length > 0
-                  ? stderrTail.join(" ")
-                  : "The repository could not be cloned.",
+              provider,
+              detail: cloneFailureDetail(stderrTail.join(" "), prepared.cloneUrl),
               cause,
             }),
         ),
       );
+
+    if (cloneResult.exitCode !== 0) {
+      return yield* new SourceControlRepositoryError({
+        operation: "cloneRepository",
+        provider,
+        detail: cloneFailureDetail(stderrTail.join(" ") || cloneResult.stderr, prepared.cloneUrl),
+        cause: new GitCommandError({
+          operation: "SourceControlRepositoryService.cloneRepository",
+          command: "git",
+          cwd: path.dirname(prepared.destinationPath),
+          argumentCount: 4,
+          exitCode: cloneResult.exitCode,
+          stdoutLength: cloneResult.stdout.length,
+          stderrLength: cloneResult.stderr.length,
+          detail: "git clone exited with a non-zero status.",
+        }),
+      });
+    }
 
     return {
       cwd: prepared.destinationPath,
@@ -339,7 +409,7 @@ export const make = Effect.gen(function* () {
   const discardClone = Effect.fn("SourceControlRepositoryService.discardClone")(function* (
     destinationPath: string,
   ) {
-    const normalized = yield* normalizeDestinationPath(destinationPath);
+    const normalized = yield* normalizeDestinationPath(destinationPath, "unknown");
     // Only what git left behind may go. The destination was empty when the
     // clone started, so anything without a `.git` inside was put there by
     // someone else since; refuse rather than delete their files.

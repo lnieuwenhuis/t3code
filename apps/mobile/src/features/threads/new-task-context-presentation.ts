@@ -93,3 +93,11 @@ export function filterNewTaskBranches<T extends { readonly name: string }>(
     ? branches
     : branches.filter((branch) => branch.name.toLowerCase().includes(query));
 }
+
+export function resolveNewTaskBranchAfterModeChange(
+  previousMode: WorkspaceMode,
+  nextMode: WorkspaceMode,
+  branch: string | null,
+): string | null {
+  return previousMode === "local" && nextMode === "worktree" ? null : branch;
+}

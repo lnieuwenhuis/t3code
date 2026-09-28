@@ -12,6 +12,7 @@ export function useComposerPathSearch(target: ComposerPathSearchTarget): Compose
       path: entry.path,
       kind: entry.kind,
     })),
+    truncated: state.truncated,
     error: state.error,
     isPending: state.isPending,
   };

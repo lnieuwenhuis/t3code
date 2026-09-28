@@ -82,6 +82,7 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
   resolvedTheme: "light" | "dark";
   isLoading: boolean;
   triggerKind: ComposerTriggerKind | null;
+  partialResultsHint?: string | null;
   emptyStateText?: string;
   activeItemId: string | null;
   onHighlightedItemChange: (itemId: string | null) => void;
@@ -146,6 +147,9 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
             </p>
           </div>
         )}
+        {props.partialResultsHint ? (
+          <p className="px-5 pb-3 text-xs text-secondary-label">{props.partialResultsHint}</p>
+        ) : null}
       </ComposerBanner.Surface>
     </Command>
   );

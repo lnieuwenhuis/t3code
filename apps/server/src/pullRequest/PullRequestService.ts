@@ -2631,9 +2631,13 @@ export const make = Effect.gen(function* () {
   // epoch strands every entry made under the old one — no enumerating a cache whose keys
   // (cursors, commits) nothing holds a list of. The counter is shared and monotonic so a
   // scope re-entering `refEpochs` after eviction can never mint a key an old entry still has.
+  // Detail and diff ride separate epochs: a poll only needs title/check freshness, so it
+  // strands the cheap detail hold while the mounted diff keeps its stale-while-revalidate
+  // path. Mutations and the manual refresh strand both.
   let epochCounter = 0;
   let listingsEpoch = 0;
   const refEpochs = new Map<string, number>();
+  const diffEpochs = new Map<string, number>();
   const projectEpochs = new Map<ProjectId, number>();
   let projectEpochFloor = 0;
   const REF_EPOCH_CAPACITY = 2_048;
@@ -2644,16 +2648,13 @@ export const make = Effect.gen(function* () {
       ref.repository.toLowerCase(),
       ref.number,
     ]);
-  const refEpoch = (ref: PullRequestRef) =>
-    Math.max(
-      projectEpochs.get(ref.projectId) ?? projectEpochFloor,
-      refEpochs.get(refScope(ref)) ?? 0,
-    );
+  const refEpoch = (ref: PullRequestRef) => mapEpoch(refEpochs, ref);
+  const diffEpoch = (ref: PullRequestRef) => mapEpoch(diffEpochs, ref);
   // Keys carry the reference back out of the cache loader, so the slot layout is shared with
   // `refOfCacheKey` rather than read positionally at every loader.
-  const refCacheKey = (ref: CredentialRef) =>
+  const refCacheKey = (ref: CredentialRef, epoch = refEpoch(ref)) =>
     JSON.stringify([
-      refEpoch(ref),
+      epoch,
       ref.projectId,
       ref.host?.toLowerCase() ?? null,
       ref.repository.toLowerCase(),
@@ -2689,20 +2690,35 @@ export const make = Effect.gen(function* () {
       if (oldest !== undefined) recentStats.delete(oldest);
     }
   };
-  const bumpEpoch = (epochs: Map<string, number>, ref: PullRequestRef) => {
+  const bumpMapEpoch = (epochs: Map<string, number>, ref: PullRequestRef) => {
     const scope = refScope(ref);
     if (!epochs.has(scope) && epochs.size >= REF_EPOCH_CAPACITY) {
       const oldest = epochs.keys().next().value;
       if (oldest !== undefined) epochs.delete(oldest);
     }
-    epochs.set(scope, ++epochCounter);
+    const epoch = ++epochCounter;
+    epochs.delete(scope);
+    epochs.set(scope, epoch);
+    return epoch;
   };
-  const bumpRefEpoch = (ref: PullRequestRef) => bumpEpoch(refEpochs, ref);
+  // Reads reserve an epoch too: returning a default after eviction would revive held keys.
+  const mapEpoch = (epochs: Map<string, number>, ref: PullRequestRef) => {
+    const scope = refScope(ref);
+    const epoch = epochs.get(scope) ?? bumpMapEpoch(epochs, ref);
+    epochs.delete(scope);
+    epochs.set(scope, epoch);
+    return Math.max(projectEpochs.get(ref.projectId) ?? projectEpochFloor, epoch);
+  };
+  const bumpDetailEpoch = (ref: PullRequestRef) => bumpMapEpoch(refEpochs, ref);
+  const bumpRefEpoch = (ref: PullRequestRef) => {
+    bumpMapEpoch(refEpochs, ref);
+    bumpMapEpoch(diffEpochs, ref);
+  };
   // Its own scope, so a press forgets the reader's ticks and nothing else. The read's key
   // carries both epochs, which is what makes an ordinary refresh re-ask for these too.
   const filesViewedEpochs = new Map<string, number>();
-  const filesViewedEpoch = (ref: PullRequestRef) => filesViewedEpochs.get(refScope(ref)) ?? 0;
-  const bumpFilesViewedEpoch = (ref: PullRequestRef) => bumpEpoch(filesViewedEpochs, ref);
+  const filesViewedEpoch = (ref: PullRequestRef) => mapEpoch(filesViewedEpochs, ref);
+  const bumpFilesViewedEpoch = (ref: PullRequestRef) => bumpMapEpoch(filesViewedEpochs, ref);
 
   /** Bumped by a whole-workspace refresh, the one drop no single reference's epoch covers. */
   let everyFileRevisionEpoch = 0;
@@ -3035,14 +3051,23 @@ export const make = Effect.gen(function* () {
       },
     },
   );
+  const lastGoodDiffRevision = makeLastGoodRead<string>(DIFF_CACHE_CAPACITY);
   const diff: PullRequestService["Service"]["diff"] = (input) => {
+    const epoch = diffEpoch(input);
+    const revisionKey = refCacheKey(input, epoch);
+    const observedRevision = lastGoodSummary.peek(refCacheKey(input))?.updatedAt;
+    // Detail invalidation must not erase the revision identifying held diff pages while
+    // the fresh metadata is pending or fails. Full invalidation changes this key's epoch.
+    const revision = observedRevision ?? lastGoodDiffRevision.peek(revisionKey) ?? null;
+    const rememberRevision =
+      input.commit === undefined && observedRevision !== undefined
+        ? lastGoodDiffRevision.record(revisionKey, observedRevision)
+        : Effect.void;
     const key = JSON.stringify([
-      refCacheKey(input),
+      revisionKey,
       input.cursor ?? null,
       input.commit ?? null,
-      input.commit === undefined
-        ? (lastGoodSummary.peek(refCacheKey(input))?.updatedAt ?? null)
-        : null,
+      input.commit === undefined ? revision : null,
     ]);
     const read = Cache.get(diffCache, key).pipe(
       Effect.tap((value) =>
@@ -3058,7 +3083,7 @@ export const make = Effect.gen(function* () {
             ),
       ),
     );
-    return staleDiff(key, read);
+    return rememberRevision.pipe(Effect.andThen(staleDiff(key, read)));
   };
 
   const filesViewedCache = yield* Cache.makeWith(
@@ -3154,7 +3179,13 @@ export const make = Effect.gen(function* () {
         Effect.flatMap((ref) =>
           readCache
             .invalidate(refScope(ref))
-            .pipe(Effect.andThen(Effect.sync(() => bumpRefEpoch(ref)))),
+            .pipe(
+              Effect.andThen(
+                Effect.sync(() =>
+                  input.scope === "detail" ? bumpDetailEpoch(ref) : bumpRefEpoch(ref),
+                ),
+              ),
+            ),
         ),
         Effect.ignore,
       );

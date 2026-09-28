@@ -54,7 +54,8 @@ vi.mock("../../state/usage", () => ({
     refresh: async () => undefined,
   }),
 }));
-vi.mock("./usagePagePreferences", () => ({
+vi.mock("./usagePagePreferences", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./usagePagePreferences")>()),
   readUsagePagePreferences: () => ({ metric: state.metric, windowDays: 30 }),
   saveUsagePagePreferences: vi.fn(),
 }));

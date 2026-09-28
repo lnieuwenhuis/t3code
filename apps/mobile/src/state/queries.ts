@@ -324,6 +324,7 @@ export function useComposerPathSearch(target: ComposerPathSearchTarget) {
 
   return {
     entries: result.data?.entries ?? [],
+    truncated: result.data?.truncated ?? false,
     error: result.error,
     isPending: normalizedTarget.query !== debouncedTarget.query || result.isPending,
     refresh: result.refresh,

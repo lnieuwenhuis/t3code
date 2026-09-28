@@ -2800,6 +2800,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         pullRequestTextQuery !== debouncedPullRequestTextQuery ||
         pullRequestTriggerNumber !== debouncedPullRequestNumber ||
         exactPullRequestLookup.isPending));
+  const workspaceEntriesPartialResultsHint =
+    !workspaceEntries.isPending && composerTriggerKind === "path" && workspaceEntries.truncated
+      ? workspaceEntries.entries.length === 0
+        ? "Workspace results are partial. Refine your query to search more precisely."
+        : "Showing partial results. Refine your query to narrow the file search."
+      : null;
   const composerMenuEmptyState = useMemo(() => {
     if (composerTriggerKind === "skill") {
       return "No skills found. Try / to browse provider commands.";
@@ -6834,6 +6840,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     resolvedTheme={resolvedTheme}
                     isLoading={isComposerMenuLoading}
                     triggerKind={composerTriggerKind}
+                    partialResultsHint={workspaceEntriesPartialResultsHint}
                     emptyStateText={composerMenuEmptyState}
                     activeItemId={activeComposerMenuItem?.id ?? null}
                     onHighlightedItemChange={onComposerMenuItemHighlighted}
