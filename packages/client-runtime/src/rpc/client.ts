@@ -1,7 +1,6 @@
-import { ORCHESTRATION_WS_METHODS, WS_METHODS } from "@t3tools/contracts";
+import { ORCHESTRATION_V2_WS_METHODS, WS_METHODS } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as Deferred from "effect/Deferred";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -44,11 +43,12 @@ type RpcMethod<TTag extends EnvironmentRpcTag> = WsRpcProtocolClient[TTag];
 export type EnvironmentSubscriptionRpcTag =
   | typeof WS_METHODS.providerAuthSubscribe
   | typeof WS_METHODS.providerInstallSubscribe
-  | typeof ORCHESTRATION_WS_METHODS.subscribeShell
-  | typeof ORCHESTRATION_WS_METHODS.subscribeThread
+  | typeof ORCHESTRATION_V2_WS_METHODS.subscribeShell
+  | typeof ORCHESTRATION_V2_WS_METHODS.subscribeThread
   | typeof WS_METHODS.subscribeAuthAccess
   | typeof WS_METHODS.subscribeServerConfig
   | typeof WS_METHODS.subscribeServerLifecycle
+  | typeof WS_METHODS.scheduledTasksSubscribe
   | typeof WS_METHODS.subscribeTerminalEvents
   | typeof WS_METHODS.subscribeTerminalMetadata
   | typeof WS_METHODS.subscribePreviewEvents
@@ -131,6 +131,13 @@ const currentSession = Effect.fn("EnvironmentRpc.currentSession")(function* () {
   );
 });
 
+export const getInitialServerConfig = Effect.fn("EnvironmentRpc.getInitialServerConfig")(
+  function* () {
+    const session = yield* currentSession();
+    return yield* session.initialConfig;
+  },
+);
+
 export const request = Effect.fn("EnvironmentRpc.request")(function* <
   TTag extends EnvironmentUnaryRpcTag,
 >(tag: TTag, input: EnvironmentRpcInput<TTag>) {
@@ -185,35 +192,14 @@ interface SubscriptionOptions<TTag extends EnvironmentSubscriptionRpcTag> {
   ) => Effect.Effect<void, never, never>;
   readonly retryExpectedFailureAfter?: Duration.Input;
   readonly resubscribe?: Stream.Stream<unknown, never, never>;
-  /**
-   * Classifies an all-Fail cause as terminal: the attempt ends for this
-   * session with no retry, after `handle` runs. Checked after transport
-   * failures and before expected-failure retry.
-   */
-  readonly terminalFailure?: {
-    readonly matches: (error: EnvironmentRpcStreamFailure<TTag>) => boolean;
-    readonly handle: (cause: Cause.Cause<EnvironmentRpcStreamFailure<TTag>>) => Effect.Effect<void>;
-  };
-}
-
-export type DynamicSubscriptionGeneration = symbol;
-
-export interface DynamicSubscriptionItem<A> {
-  readonly generation: DynamicSubscriptionGeneration;
-  readonly session: RpcSession;
-  readonly value: A;
 }
 
 function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
   tag: TTag,
-  makeInput: (
-    session: RpcSession,
-    generation: DynamicSubscriptionGeneration,
-  ) => Effect.Effect<EnvironmentRpcInput<TTag>>,
+  makeInput: (session: RpcSession) => Effect.Effect<EnvironmentRpcInput<TTag>>,
   mapStream: (
     session: RpcSession,
     stream: Stream.Stream<EnvironmentRpcStreamValue<TTag>, EnvironmentRpcStreamFailure<TTag>>,
-    generation: DynamicSubscriptionGeneration,
   ) => Stream.Stream<A, EnvironmentRpcStreamFailure<TTag>>,
   options?: SubscriptionOptions<TTag>,
 ): Stream.Stream<A, EnvironmentRpcStreamFailure<TTag>, EnvironmentSupervisor> {
@@ -221,12 +207,6 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
     Effect.gen(function* () {
       const supervisor = yield* EnvironmentSupervisor;
       const observer = yield* EnvironmentRpcSubscriptionObserver;
-      // Signaled before a terminalFailure handler runs. Interrupts the
-      // outer session stream below so a supervisor.session replacement
-      // landing during the handler's cache I/O cannot re-issue the
-      // subscription after a terminal tombstone; the handler itself still
-      // runs to completion as the draining inner.
-      const terminalHalt = yield* Deferred.make<void>();
       const sessionChanges = SubscriptionRef.changes(supervisor.session);
       const sessions =
         options?.resubscribe === undefined
@@ -238,7 +218,6 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
               ),
             );
       return sessions.pipe(
-        Stream.interruptWhen(Deferred.await(terminalHalt)),
         Stream.switchMap(
           Option.match({
             onNone: () => Stream.empty,
@@ -254,17 +233,16 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                 EnvironmentRpcStreamFailure<TTag>
               >;
               const subscribeToSession = (): Stream.Stream<A, EnvironmentRpcStreamFailure<TTag>> =>
-                Stream.suspend(() => {
-                  const generation: DynamicSubscriptionGeneration = Symbol();
-                  return Stream.unwrap(
+                Stream.suspend(() =>
+                  Stream.unwrap(
                     Effect.gen(function* () {
-                      const input = yield* makeInput(session, generation);
+                      const input = yield* makeInput(session);
                       const completeObservation = yield* observer.observe({
                         environmentId: supervisor.target.environmentId,
                         method: tag,
                         input,
                       });
-                      const stream = mapStream(session, method(input), generation);
+                      const stream = mapStream(session, method(input));
                       // An evicted preview host completes its registration stream.
                       // Re-register only after completion; failures still follow the
                       // session recovery policy and browser actions are never replayed.
@@ -308,21 +286,6 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                           ),
                         ).pipe(Stream.drain);
                       }
-                      const terminal = options?.terminalFailure;
-                      if (
-                        hasOnlyExpectedFailures &&
-                        terminal !== undefined &&
-                        cause.reasons.every(
-                          (reason) => reason._tag === "Fail" && terminal.matches(reason.error),
-                        )
-                      ) {
-                        return Stream.fromEffect(
-                          Deferred.succeed(terminalHalt, undefined).pipe(
-                            Effect.asVoid,
-                            Effect.andThen(terminal.handle(cause)),
-                          ),
-                        ).pipe(Stream.drain);
-                      }
                       if (hasOnlyExpectedFailures && options?.onExpectedFailure !== undefined) {
                         const handled = Stream.fromEffect(options.onExpectedFailure(cause)).pipe(
                           Stream.drain,
@@ -341,8 +304,8 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                       }
                       return Stream.failCause(cause);
                     }),
-                  );
-                });
+                  ),
+                );
               return subscribeToSession();
             },
           }),
@@ -356,28 +319,7 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
   );
 }
 
-export function subscribeDynamicWithGeneration<TTag extends EnvironmentSubscriptionRpcTag>(
-  tag: TTag,
-  makeInput: (
-    session: RpcSession,
-    generation: DynamicSubscriptionGeneration,
-  ) => Effect.Effect<EnvironmentRpcInput<TTag>>,
-  options?: SubscriptionOptions<TTag>,
-): Stream.Stream<
-  DynamicSubscriptionItem<EnvironmentRpcStreamValue<TTag>>,
-  EnvironmentRpcStreamFailure<TTag>,
-  EnvironmentSupervisor
-> {
-  return subscribeDynamicMapped(
-    tag,
-    makeInput,
-    (session, stream, generation) =>
-      stream.pipe(Stream.map((value) => ({ generation, session, value }))),
-    options,
-  );
-}
-
-function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
+export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
   tag: TTag,
   makeInput: (session: RpcSession) => Effect.Effect<EnvironmentRpcInput<TTag>>,
   options?: SubscriptionOptions<TTag>,

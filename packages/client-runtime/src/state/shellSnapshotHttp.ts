@@ -1,4 +1,4 @@
-import type { OrchestrationShellSnapshot } from "@t3tools/contracts";
+import type { OrchestrationV2ShellSnapshot } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -10,11 +10,18 @@ import { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
 import type { PreparedConnection } from "../connection/model.ts";
 import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
-import { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAuth.ts";
+import {
+  executeAuthenticatedEnvironmentHttpRequest,
+  withOrchestrationProtocolHeader,
+} from "./environmentHttpAuth.ts";
 
-// Bounded so a pathologically slow endpoint cannot block the (cheaper) socket
-// fallback for long. The cached shell renders while this runs.
-const DEFAULT_SHELL_SNAPSHOT_TIMEOUT_MS = 6_000;
+// Long enough for a slow but alive server to finish. On timeout the socket asks
+// the same server for the same full snapshot, so a short deadline only throws
+// the first build away. The socket fallback is for setups where /api fails but
+// /ws works, such as a proxy that blocks /api. A dead server is caught by the
+// socket ping, which drops the session and interrupts this load. The cached
+// shell renders while this runs.
+const DEFAULT_SHELL_SNAPSHOT_TIMEOUT_MS = 20_000;
 
 /**
  * Load the environment shell snapshot (projects + thread shells) over HTTP
@@ -36,7 +43,8 @@ export const fetchEnvironmentShellSnapshot = Effect.fn(
     method: "GET",
     url: (httpBaseUrl) => environmentEndpointUrl(httpBaseUrl, "/api/orchestration/shell"),
     timeoutMs: input.timeoutMs ?? DEFAULT_SHELL_SNAPSHOT_TIMEOUT_MS,
-    request: ({ client, headers }) => client.shellSnapshot({ headers }),
+    request: ({ client, headers }) =>
+      client.shellSnapshot({ headers: withOrchestrationProtocolHeader(headers) }),
   });
 });
 
@@ -51,7 +59,7 @@ export class ShellSnapshotLoader extends Context.Service<
   {
     readonly load: (
       prepared: PreparedConnection,
-    ) => Effect.Effect<Option.Option<OrchestrationShellSnapshot>>;
+    ) => Effect.Effect<Option.Option<OrchestrationV2ShellSnapshot>>;
   }
 >()("@t3tools/client-runtime/state/shellSnapshotHttp/ShellSnapshotLoader") {}
 
@@ -70,14 +78,14 @@ export const shellSnapshotLoaderLayer: Layer.Layer<
     return ShellSnapshotLoader.of({
       load: (prepared: PreparedConnection) =>
         fetchEnvironmentShellSnapshot({ prepared, signer, remoteAuthorization }).pipe(
-          Effect.map(Option.some<OrchestrationShellSnapshot>),
+          Effect.map(Option.some<OrchestrationV2ShellSnapshot>),
           Effect.provideService(HttpClient.HttpClient, httpClient),
           Effect.catchCause((cause) =>
             Effect.logWarning(
               "Could not load the environment shell snapshot over HTTP; using the socket snapshot instead.",
             ).pipe(
               Effect.annotateLogs({ cause: Cause.pretty(cause) }),
-              Effect.as(Option.none<OrchestrationShellSnapshot>()),
+              Effect.as(Option.none<OrchestrationV2ShellSnapshot>()),
             ),
           ),
         ),

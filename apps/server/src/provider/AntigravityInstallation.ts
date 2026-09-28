@@ -315,7 +315,7 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
       );
     }
     const contents = yield* fs.readFileString(filePath);
-    return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(contents);
+    return yield* Schema.decodeEffect(Schema.fromJsonString(schema))(contents);
   });
 
   const executableFile = Effect.fn("AntigravityInstallation.executableFile")(function* (
@@ -476,6 +476,9 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
           profileDirectory,
           platform,
           baseEnv: environment,
+          // The profile is scoped, so it cleans up the unpack; a shallow
+          // root keeps it under Windows' path limit.
+          tempDirectory: profileDirectory,
         });
         const runtime = yield* makeAntigravityAcpRuntime({
           spawn: buildAntigravityAcpSpawnInput({
@@ -492,7 +495,9 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
         if (
           initialized.agentInfo?.name !== "antigravity-acp" ||
           initialized.agentInfo.version !== expectedVersion ||
-          initialized.protocolVersion !== 1 ||
+          // Antigravity 1.1.1 can report 2 with the legacy ACP response shape.
+          // The ACP client chooses the session wire format from that shape.
+          (initialized.protocolVersion !== 1 && initialized.protocolVersion !== 2) ||
           initialized.agentCapabilities?.loadSession !== true ||
           !initialized.agentCapabilities.sessionCapabilities?.resume ||
           !initialized.agentCapabilities.auth?.logout ||

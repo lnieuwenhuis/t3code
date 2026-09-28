@@ -14,6 +14,7 @@ import {
   type SidebarProjectGroupingMode,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { presentThreadShell } from "@t3tools/client-runtime/state/shell";
 import {
   isAtomCommandInterrupted,
   settlePromise,
@@ -22,6 +23,7 @@ import {
 import {
   DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE,
   DEFAULT_UNIFIED_SETTINGS,
+  type ChatWidth,
   type DiffLayout,
   type EnvironmentIdentificationMode,
   MAX_APPEARANCE_CONTRAST,
@@ -96,15 +98,6 @@ import { isMacPlatform } from "../../lib/utils";
 import { EMPTY_SERVER_PROVIDERS } from "../../state/server";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
-import {
-  AlertDialog,
-  AlertDialogClose,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogPopup,
-  AlertDialogTitle,
-} from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import {
@@ -181,14 +174,11 @@ const ENVIRONMENT_IDENTIFICATION_LABELS: Record<EnvironmentIdentificationMode, s
 const RESPONSE_STREAMING_MODE_LABELS: Record<ResponseStreamingMode, string> = {
   turn: "Wait for the full response",
   paragraph: "Show finished paragraphs",
-  token: "Token by token (legacy)",
 };
 
 const RESPONSE_STREAMING_MODE_DESCRIPTIONS: Record<ResponseStreamingMode, string> = {
   turn: "Text appears once the agent finishes its turn.",
   paragraph: "Each paragraph or code block appears as soon as it is complete.",
-  token:
-    "Every token repaints the answer as it arrives. Slower and harder to read. Thinking traces still arrive a paragraph at a time.",
 };
 
 const TIMESTAMP_FORMAT_LABELS = {
@@ -196,6 +186,12 @@ const TIMESTAMP_FORMAT_LABELS = {
   "12-hour": "12-hour",
   "24-hour": "24-hour",
 } as const;
+
+const CHAT_WIDTH_LABELS: Record<ChatWidth, string> = {
+  comfortable: "Comfortable",
+  wide: "Wide",
+  full: "Full",
+};
 
 const DIFF_LAYOUT_LABELS: Record<DiffLayout, string> = {
   stacked: "Stacked",
@@ -264,7 +260,7 @@ function AboutVersionTitle() {
   return (
     <span className="inline-flex items-baseline gap-2">
       <span>Version</span>
-      <code className="text-[11px] font-medium text-muted-foreground">{APP_VERSION}</code>
+      <code className="text-2xs font-medium text-muted-foreground">{APP_VERSION}</code>
     </span>
   );
 }
@@ -532,6 +528,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.diffColorScheme !== DEFAULT_UNIFIED_SETTINGS.diffColorScheme
         ? ["Diff colors"]
         : []),
+      ...(settings.chatWidth !== DEFAULT_UNIFIED_SETTINGS.chatWidth ? ["Chat width"] : []),
       ...(settings.panelAnimationDurationMs !== DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs
         ? ["Panel animations"]
         : []),
@@ -565,7 +562,17 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.sidebarAutoSettleOnMerge !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge
         ? ["Auto-settle merged threads"]
         : []),
+      ...(settings.autoResumeLimitedThreads !== DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads
+        ? ["Auto-resume limited threads"]
+        : []),
+      ...(settings.snoozeLimitedThreads !== DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads
+        ? ["Snooze limited threads"]
+        : []),
       ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
+      ...(settings.persistComposerContextStrip !==
+      DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip
+        ? ["Composer context"]
+        : []),
       ...getChangedTypographySettingLabels(settings),
       ...(settings.diffFilesCollapsed !== DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed
         ? ["Default diff file state"]
@@ -644,6 +651,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.browserAutoShowFloatingPreview,
       settings.appearanceContrast,
       settings.diffColorScheme,
+      settings.chatWidth,
       settings.enableAgentBrowserAccess,
       settings.confirmQuit,
       settings.confirmThreadArchive,
@@ -673,10 +681,13 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.glassOpacity,
       settings.panelAnimationDurationMs,
       settings.responseStreamingMode,
+      settings.persistComposerContextStrip,
       settings.enableProviderUpdateChecks,
       settings.continueThreadsAfterServerUpdate,
       settings.sidebarAutoSettleAfterDays,
       settings.sidebarAutoSettleOnMerge,
+      settings.autoResumeLimitedThreads,
+      settings.snoozeLimitedThreads,
       settings.sidebarProjectGroupingMode,
       settings.sidebarThreadPreviewCount,
       settings.sidebarUsageLimitsEnabled,
@@ -756,10 +767,12 @@ export function useSettingsRestore(onRestored?: () => void) {
     updateSettings({
       appearanceContrast: DEFAULT_UNIFIED_SETTINGS.appearanceContrast,
       diffColorScheme: DEFAULT_UNIFIED_SETTINGS.diffColorScheme,
+      chatWidth: DEFAULT_UNIFIED_SETTINGS.chatWidth,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       notificationMode: DEFAULT_UNIFIED_SETTINGS.notificationMode,
       inAppNotificationsEnabled: DEFAULT_UNIFIED_SETTINGS.inAppNotificationsEnabled,
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
+      persistComposerContextStrip: DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip,
       diffFilesCollapsed: DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed,
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
       diffLayout: DEFAULT_UNIFIED_SETTINGS.diffLayout,
@@ -774,10 +787,12 @@ export function useSettingsRestore(onRestored?: () => void) {
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
       panelAnimationDurationMs: DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs,
       sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
-      sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarUsageLimitsEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarUsageLimitsEnabled,
+      sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
+      autoResumeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads,
+      snoozeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads,
       responseStreamingMode: DEFAULT_UNIFIED_SETTINGS.responseStreamingMode,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
       continueThreadsAfterServerUpdate: DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate,
@@ -831,44 +846,6 @@ export function useSettingsRestore(onRestored?: () => void) {
     changedSettingLabels,
     restoreDefaults,
   };
-}
-
-/**
- * Gate in front of the legacy token-by-token mode. The primary action steers
- * the user to paragraph streaming; the legacy path is the quiet option.
- */
-function TokenStreamingWarningDialog({
-  open,
-  onOpenChange,
-  onConfirm,
-  onUseParagraphs,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onConfirm: () => void;
-  onUseParagraphs: () => void;
-}) {
-  return (
-    <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogPopup>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Token by token is a worse experience</AlertDialogTitle>
-          <AlertDialogDescription>
-            Token streaming repaints the message on every delta. It is slower, harder to read, and
-            costs more CPU on every connected device. This mode stays only for backwards
-            compatibility. Use paragraph streaming instead.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <Button variant="ghost-muted" className="sm:mr-auto" onClick={onConfirm}>
-            Use token by token
-          </Button>
-          <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
-          <Button onClick={onUseParagraphs}>Use paragraphs</Button>
-        </AlertDialogFooter>
-      </AlertDialogPopup>
-    </AlertDialog>
-  );
 }
 
 function BackgroundActivityAdvancedDialog({
@@ -1342,6 +1319,7 @@ export function AppearanceSettingsPanel() {
             }
           />
         ) : null}
+
         <SettingsRow
           {...searchableSetting("diff-color-scheme")}
           description="Choose colors for additions and deletions, including change counts."
@@ -1373,8 +1351,8 @@ export function AppearanceSettingsPanel() {
                         : "flex shrink-0 gap-1"
                     }
                   >
-                    <span className="size-2 rounded-full bg-[var(--diff-deletion)]" />
-                    <span className="size-2 rounded-full bg-[var(--diff-addition)]" />
+                    <span className="size-2 rounded-full bg-diff-deletion" />
+                    <span className="size-2 rounded-full bg-diff-addition" />
                   </span>
                   <SelectValue>
                     {settings.diffColorScheme === "blue-orange" ? "Blue & orange" : "Red & green"}
@@ -1383,6 +1361,67 @@ export function AppearanceSettingsPanel() {
                 <SelectPopup align="end" alignItemWithTrigger={false}>
                   <SelectItem value="red-green">Red & green (default)</SelectItem>
                   <SelectItem value="blue-orange">Blue & orange</SelectItem>
+                </SelectPopup>
+              </Select>
+            </div>
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("composer-context")}
+          description="Keep branch and worktree controls below the composer after a thread starts."
+          resetAction={
+            settings.persistComposerContextStrip !==
+            DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip ? (
+              <SettingResetButton
+                label="composer context"
+                onClick={() =>
+                  updateSettings({
+                    persistComposerContextStrip:
+                      DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.persistComposerContextStrip}
+              onCheckedChange={(checked) =>
+                updateSettings({ persistComposerContextStrip: Boolean(checked) })
+              }
+              aria-label="Keep composer context visible in active threads"
+            />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("chat-width")}
+          description="Set how wide messages and the composer can grow on large screens."
+          resetAction={
+            settings.chatWidth !== DEFAULT_UNIFIED_SETTINGS.chatWidth ? (
+              <SettingResetButton
+                label="chat width"
+                onClick={() => updateSettings({ chatWidth: DEFAULT_UNIFIED_SETTINGS.chatWidth })}
+              />
+            ) : null
+          }
+          control={
+            <div className="w-full sm:w-40">
+              <Select
+                value={settings.chatWidth}
+                onValueChange={(value) => {
+                  if (value === "comfortable" || value === "wide" || value === "full")
+                    updateSettings({ chatWidth: value });
+                }}
+              >
+                <SelectTrigger size="sm" className="w-full min-w-0" aria-label="Chat width">
+                  <SelectValue>{CHAT_WIDTH_LABELS[settings.chatWidth]}</SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  <SelectItem value="comfortable">Comfortable (default)</SelectItem>
+                  <SelectItem value="wide">Wide</SelectItem>
+                  <SelectItem value="full">Full</SelectItem>
                 </SelectPopup>
               </Select>
             </div>
@@ -2051,7 +2090,7 @@ function LegacyFeaturesSection() {
     <section id="legacy-features" ref={targetRef} tabIndex={-1} className="space-y-2.5">
       <Collapsible open={open} onOpenChange={setOpen}>
         <CollapsibleTrigger className="group flex min-h-8 w-full items-center gap-2 px-3 sm:px-4">
-          <h2 className="text-sm font-normal tracking-[-0.005em] text-foreground/70 transition-colors group-hover:text-foreground">
+          <h2 className="text-sm font-normal text-foreground/70 transition-colors group-hover:text-foreground">
             Legacy features
           </h2>
           <ChevronRightIcon className="size-4 text-muted-foreground transition-transform duration-200 group-data-panel-open:rotate-90" />
@@ -2123,7 +2162,6 @@ export function GeneralSettingsPanel() {
   const isEnvironmentScope = scope.environmentIds.length === 1 && environmentId !== null;
   const hasServerTargets = connectedEnvironments.length > 0;
   const [backgroundActivityDialogOpen, setBackgroundActivityDialogOpen] = useState(false);
-  const [tokenStreamingWarningOpen, setTokenStreamingWarningOpen] = useState(false);
   const mixedResponseStreamingMode = useScopedSettingsMixed(["responseStreamingMode"]);
   const lastEnabledProjectGroupingMode = useRef<SidebarProjectGroupingMode>(
     readLastEnabledProjectGroupingMode(),
@@ -2228,6 +2266,39 @@ export function GeneralSettingsPanel() {
                 });
               }}
               aria-label="Project grouping"
+            />
+          }
+        />
+
+        <SettingsRow
+          serverScoped
+          {...searchableSetting("auto-resume-limited-threads")}
+          description="Resume usage-limit stops at the reported reset time. Each thread can cancel its scheduled continuation."
+          settingKeys={["autoResumeLimitedThreads"]}
+          control={
+            <ScopedSwitch
+              settingKeys={["autoResumeLimitedThreads"]}
+              checked={settings.autoResumeLimitedThreads}
+              onCheckedChange={(checked) =>
+                updateSettings({ autoResumeLimitedThreads: Boolean(checked) })
+              }
+              aria-label="Auto-resume limited threads"
+            />
+          }
+        />
+        <SettingsRow
+          serverScoped
+          {...searchableSetting("snooze-limited-threads")}
+          description="Snooze usage-limit stops until the reported reset time. Combine with auto-resume to continue when they wake."
+          settingKeys={["snoozeLimitedThreads"]}
+          control={
+            <ScopedSwitch
+              settingKeys={["snoozeLimitedThreads"]}
+              checked={settings.snoozeLimitedThreads}
+              onCheckedChange={(checked) =>
+                updateSettings({ snoozeLimitedThreads: Boolean(checked) })
+              }
+              aria-label="Snooze limited threads"
             />
           }
         />
@@ -2403,52 +2474,30 @@ export function GeneralSettingsPanel() {
             ) : null
           }
           control={
-            <>
-              <Select
-                value={mixedResponseStreamingMode ? null : settings.responseStreamingMode}
-                onValueChange={(value) => {
-                  if (value === "token") {
-                    // The legacy path needs an explicit confirmation.
-                    setTokenStreamingWarningOpen(true);
-                    return;
+            <Select
+              value={mixedResponseStreamingMode ? null : settings.responseStreamingMode}
+              onValueChange={(value) => {
+                if (value === "turn" || value === "paragraph") {
+                  updateSettings({ responseStreamingMode: value });
+                }
+              }}
+            >
+              <SelectTrigger size="sm" className="w-full sm:w-56" aria-label="Response streaming">
+                <SelectValue>
+                  {(value: ResponseStreamingMode | null) =>
+                    value === null ? "Mixed" : RESPONSE_STREAMING_MODE_LABELS[value]
                   }
-                  if (value === "turn" || value === "paragraph") {
-                    updateSettings({ responseStreamingMode: value });
-                  }
-                }}
-              >
-                <SelectTrigger size="sm" className="w-full sm:w-56" aria-label="Response streaming">
-                  <SelectValue>
-                    {(value: ResponseStreamingMode | null) =>
-                      value === null ? "Mixed" : RESPONSE_STREAMING_MODE_LABELS[value]
-                    }
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem hideIndicator value="turn">
-                    {RESPONSE_STREAMING_MODE_LABELS.turn}
-                  </SelectItem>
-                  <SelectItem hideIndicator value="paragraph">
-                    {RESPONSE_STREAMING_MODE_LABELS.paragraph}
-                  </SelectItem>
-                  <SelectItem hideIndicator value="token">
-                    {RESPONSE_STREAMING_MODE_LABELS.token}
-                  </SelectItem>
-                </SelectPopup>
-              </Select>
-              <TokenStreamingWarningDialog
-                open={tokenStreamingWarningOpen}
-                onOpenChange={setTokenStreamingWarningOpen}
-                onConfirm={() => {
-                  updateSettings({ responseStreamingMode: "token" });
-                  setTokenStreamingWarningOpen(false);
-                }}
-                onUseParagraphs={() => {
-                  updateSettings({ responseStreamingMode: "paragraph" });
-                  setTokenStreamingWarningOpen(false);
-                }}
-              />
-            </>
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="turn">
+                  {RESPONSE_STREAMING_MODE_LABELS.turn}
+                </SelectItem>
+                <SelectItem hideIndicator value="paragraph">
+                  {RESPONSE_STREAMING_MODE_LABELS.paragraph}
+                </SelectItem>
+              </SelectPopup>
+            </Select>
           }
         />
         <SettingsRow
@@ -3284,10 +3333,7 @@ export function ArchivedThreadsPanel() {
       ),
     );
     const threads = archivedSnapshots.flatMap(({ environmentId, snapshot }) =>
-      snapshot.threads.map((thread) => ({
-        ...thread,
-        environmentId,
-      })),
+      snapshot.threads.map((thread) => presentThreadShell(environmentId, thread)),
     );
 
     const archivedProjects = Array.from(projectsByEnvironmentAndId.values());

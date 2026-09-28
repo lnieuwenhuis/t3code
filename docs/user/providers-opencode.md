@@ -47,10 +47,3 @@ restart before T3 Code can see configuration changes.
 
 Existing threads keep their selected model and options even when it disappears
 from the catalog. If OpenCode rejects that model, select an available one and retry.
-
-## Delegating to OpenCode from another provider
-
-OpenCode can delegate to other installed providers, and other providers can delegate
-to OpenCode. Foreground provider commands appear in **Agents** while they run.
-See [delegating between providers](./thread-sidebar.md#delegating-between-providers)
-for supported commands and output formats.

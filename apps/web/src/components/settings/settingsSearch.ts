@@ -19,6 +19,7 @@ export type SettingsPath =
   | "/settings/snap-shot"
   | "/settings/providers"
   | "/settings/integrations"
+  | "/settings/scheduled-tasks"
   | "/settings/source-control"
   | "/settings/storage"
   | "/settings/connections"
@@ -55,6 +56,7 @@ export interface SettingsSearchItem {
   readonly cloudOnly?: boolean;
   readonly environmentOnly?: boolean;
   readonly providerSettingsOnly?: boolean;
+  readonly macProviderSettingsOnly?: boolean;
   readonly localBackendManagementOnly?: boolean;
   readonly localEnvironmentOnly?: boolean;
   readonly wslAvailableOnly?: boolean;
@@ -71,6 +73,7 @@ export interface SettingsSearchAvailability {
   readonly hasCloudPublicConfig: boolean;
   readonly hasEnvironment: boolean;
   readonly hasProviderSettingsEnvironment: boolean;
+  readonly hasMacProviderSettingsEnvironment: boolean;
   readonly canManageLocalBackend: boolean;
   readonly isWslSettingsRowVisible: boolean;
   readonly hasThreadAutoSettlement: boolean;
@@ -88,6 +91,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/snap-shot": "SnapShots",
   "/settings/providers": "Providers",
   "/settings/integrations": "Integrations",
+  "/settings/scheduled-tasks": "Scheduled Tasks",
   "/settings/source-control": "Source Control",
   "/settings/storage": "Storage",
   "/settings/connections": "Connections",
@@ -210,6 +214,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["red green blue orange additions deletions changes counts palette colorblind"],
   },
   {
+    id: "chat-width",
+    title: "Chat width",
+    to: "/settings/appearance",
+    searchTerms: ["wide full width column layout messages composer monitor"],
+  },
+  {
     id: "panel-animations",
     title: "Panel animations",
     to: "/settings/appearance",
@@ -260,16 +270,33 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["long lines code blocks tables diffs file previews"],
   },
   {
-    id: "project-grouping",
-    title: "Project grouping",
-    to: "/settings/general",
-    searchTerms: ["combine matching repositories environments sidebar"],
+    id: "composer-context",
+    title: "Composer context",
+    to: "/settings/appearance",
   },
   {
     id: "sidebar-usage-limits",
     title: "Usage limits in sidebar",
     to: "/settings/general",
     searchTerms: ["quota remaining rate limit codex claude footer subscription"],
+  },
+  {
+    id: "project-grouping",
+    title: "Project grouping",
+    to: "/settings/general",
+    searchTerms: ["combine matching repositories environments sidebar"],
+  },
+  {
+    id: "snooze-limited-threads",
+    title: "Snooze limited threads",
+    to: "/settings/general",
+    searchTerms: ["usage quota rate limit reset wake recover continue"],
+  },
+  {
+    id: "auto-resume-limited-threads",
+    title: "Auto-resume limited threads",
+    to: "/settings/general",
+    searchTerms: ["usage quota rate limit reset recover continue"],
   },
   {
     id: "auto-settle-inactive-threads",
@@ -553,6 +580,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     providerSettingsOnly: true,
   },
   {
+    id: "cursor-keychain-usage",
+    title: "Cursor account usage",
+    to: "/settings/providers",
+    searchTerms: ["cursor macOS keychain usage tokens cost limits permission"],
+    providerSettingsOnly: true,
+    macProviderSettingsOnly: true,
+  },
+  {
     id: "provider-health-check-interval",
     title: "Health check interval",
     to: "/settings/providers",
@@ -684,6 +719,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
     environmentOnly: true,
     scope: "environment-defaults",
+  },
+  {
+    id: "worktree-branch-naming",
+    title: "Worktree branch naming",
+    to: "/settings/source-control",
+    searchTerms: ["static semantic prefix custom prompt instructions feat fix refactor chore"],
+    environmentOnly: true,
+    scope: "project-defaults",
   },
   {
     id: "source-control-writing-style",
@@ -834,6 +877,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/source-control": "environment-defaults",
   "/settings/storage": "project-defaults",
   "/settings/connections": "connections",
+  "/settings/scheduled-tasks": null,
   "/settings/archived": "project-defaults",
 };
 
@@ -949,6 +993,7 @@ export function filterAvailableSettingsSearchItems(
       (!item.cloudOnly || availability.hasCloudPublicConfig) &&
       (!item.environmentOnly || availability.hasEnvironment) &&
       (!item.providerSettingsOnly || availability.hasProviderSettingsEnvironment) &&
+      (!item.macProviderSettingsOnly || availability.hasMacProviderSettingsEnvironment) &&
       (!item.localBackendManagementOnly || availability.canManageLocalBackend) &&
       (!item.localEnvironmentOnly || !availability.localEnvironmentDisabled) &&
       (!item.wslAvailableOnly || availability.isWslSettingsRowVisible) &&

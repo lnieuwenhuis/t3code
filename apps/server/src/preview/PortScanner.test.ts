@@ -492,6 +492,26 @@ effectIt.effect("stops probing a subscriber's configured paths after its scope c
   }).pipe(Effect.scoped, Effect.provide(layer));
 });
 
+effectIt.effect("writes no poll span while no client retains the scanner", () => {
+  let pollSpans = 0;
+  const tracer = Tracer.make({
+    span: (options) => {
+      if (options.name === "PortDiscovery.pollTick") pollSpans += 1;
+      return new Tracer.NativeSpan(options);
+    },
+  });
+  const layer = makeProbeFailureLayer(processProbeFailure);
+
+  return Effect.gen(function* () {
+    const scanner = yield* PortScanner.PortDiscovery;
+    yield* TestClock.adjust(Duration.seconds(15));
+    expect(pollSpans).toBe(0);
+
+    yield* scanner.retain;
+    expect(pollSpans).toBe(1);
+  }).pipe(Effect.scoped, Effect.provide(layer), Effect.withTracer(tracer));
+});
+
 effectIt.effect("uses the current configured fragment when readiness comes from cache", () => {
   const requests: string[] = [];
   const fetchFn = ((input: Parameters<typeof globalThis.fetch>[0]) => {
@@ -716,40 +736,3 @@ effectIt.effect("does not swallow process probe interruption", () =>
     }
   }),
 );
-
-effectIt.effect("idle poll ticks create no spans under the ambient parent", () => {
-  const spanNames: Array<string> = [];
-  const tracer = Tracer.make({
-    span: (options) => {
-      const span = new Tracer.NativeSpan(options);
-      const end = span.end.bind(span);
-      span.end = (endTime, exit) => {
-        end(endTime, exit);
-        spanNames.push(span.name);
-      };
-      return span;
-    },
-  });
-  // No retain call, so every tick takes the idle early-return path.
-  const layer = makeProbeFailureLayer(processProbeFailure);
-
-  const idlePolls = Effect.gen(function* () {
-    yield* PortScanner.PortDiscovery;
-    yield* TestClock.adjust(Duration.seconds(30));
-  });
-
-  // Nesting matters: the recording tracer must already be installed when the
-  // ambient span is created, and the layer (which forks the poll fiber) must
-  // build inside that ambient span so a leaked ParentSpan would be observed.
-  // Assertions run after the scope closes so the ambient span has ended.
-  return Effect.gen(function* () {
-    yield* Effect.scoped(
-      Effect.withTracer(
-        Effect.withSpan("PortScannerTest.idlePollTick")(Effect.provide(idlePolls, layer)),
-        tracer,
-      ),
-    );
-    expect(spanNames).toContain("PortScannerTest.idlePollTick");
-    expect(spanNames.filter((name) => name === "PortDiscovery.pollTick")).toHaveLength(0);
-  });
-});

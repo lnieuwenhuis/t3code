@@ -1,7 +1,4 @@
-import {
-  OrchestrationDispatchCommandError,
-  OrchestrationThreadNotFoundError,
-} from "@t3tools/contracts";
+import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
@@ -11,8 +8,6 @@ export function wasBootstrapThreadDeleted(error: unknown): boolean {
     isOrchestrationDispatchCommandError(error) && error.bootstrapThreadDisposition === "deleted"
   );
 }
-
-export const isOrchestrationThreadNotFoundError = Schema.is(OrchestrationThreadNotFoundError);
 
 export function wasBootstrapThreadNotCreated(error: unknown): boolean {
   return (

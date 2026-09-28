@@ -62,8 +62,9 @@ import { getProviderSummary } from "../settings/providerStatus";
 import { getDriverOption } from "../settings/providerDriverMeta";
 import { TerminalViewport } from "../ThreadTerminalDrawer";
 import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
-import { ClaudeAI, OpenAI } from "../Icons";
+import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { T3Wordmark } from "../T3Wordmark";
+import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
@@ -193,7 +194,7 @@ export function WelcomeWizard({
           identity={
             <div className="flex items-baseline gap-1.5" role="img" aria-label="T3 Code">
               <T3Wordmark className="h-4 w-auto shrink-0" aria-hidden />
-              <span className="text-[1.4rem] font-medium tracking-tight text-muted-foreground">
+              <span className="text-2xl font-medium tracking-tight text-muted-foreground">
                 Code
               </span>
             </div>
@@ -561,13 +562,9 @@ function PairingForm({
           />
         </div>
         {errorMessage ? (
-          <div
-            id="onboarding-pairing-error"
-            role="alert"
-            className="rounded-lg border border-destructive/30 bg-destructive/6 px-3 py-2 text-sm text-destructive"
-          >
-            {errorMessage}
-          </div>
+          <Alert id="onboarding-pairing-error" variant="error">
+            <AlertDescription>{errorMessage}</AlertDescription>
+          </Alert>
         ) : null}
         <Collapsible>
           <div className="flex items-center justify-between gap-3">
@@ -742,16 +739,17 @@ function AgentCard({
   readonly onOpenTerminal: () => void;
 }) {
   const meta = getDriverOption(ProviderDriverKind.make(driver));
-  const Icon = meta?.icon;
   const displayName = driver === "claudeAgent" ? "Claude Code" : (meta?.label ?? driver);
   const summary = getProviderSummary(provider);
   const providerState = getOnboardingProviderState(provider);
 
   return (
     <div className="flex items-center gap-3 rounded-lg border border-border bg-background px-3 py-2.5">
-      {Icon ? (
-        <Icon className={cn("size-5 shrink-0", driver !== "claudeAgent" && "fill-foreground")} />
-      ) : null}
+      <ProviderInstanceIcon
+        driverKind={ProviderDriverKind.make(driver)}
+        displayName={displayName}
+        iconClassName="size-5"
+      />
       <div className="min-w-0 flex-1">
         <span className="block text-sm font-medium text-foreground">{displayName}</span>
         <p className="mt-0.5 text-xs leading-relaxed break-words whitespace-pre-wrap text-muted-foreground">
@@ -887,9 +885,12 @@ function AgentInstallTerminal({
   ]);
 
   return (
-    <div className="thread-terminal-drawer mt-4 overflow-hidden rounded-lg border border-border/70 bg-background text-foreground">
+    <div
+      data-thread-terminal-drawer
+      className="mt-4 overflow-hidden rounded-lg border border-border/70 bg-background text-foreground"
+    >
       <div className="flex items-center justify-between border-b border-border/60 bg-background/60 px-3 py-1.5">
-        <span className="text-[11px] font-medium text-muted-foreground">
+        <span className="text-2xs font-medium text-muted-foreground">
           {setupState === "writeFailed" ? (
             <>
               Run <code className="rounded bg-muted px-1 font-mono">{command}</code> in this
@@ -1442,9 +1443,7 @@ function ImportCandidateRow({
             {label}
           </span>
           {secondary !== undefined ? (
-            <span className="truncate font-mono text-[11px] text-muted-foreground">
-              {secondary}
-            </span>
+            <span className="truncate font-mono text-2xs text-muted-foreground">{secondary}</span>
           ) : null}
         </TooltipTrigger>
         <TooltipPopup variant="code">{candidate.path}</TooltipPopup>
@@ -1479,11 +1478,25 @@ function ImportRowMeta({
     <span className="ml-auto grid shrink-0 grid-cols-[1rem_1rem_2.5rem_2.25rem] items-center gap-x-1 text-xs text-muted-foreground tabular-nums">
       <span className="flex size-4 items-center justify-center">
         {sources?.includes("claudeAgent") ? (
-          <ClaudeAI className="size-3" aria-label="Claude Code" />
+          <span role="img" aria-label="Claude Code">
+            <ProviderInstanceIcon
+              driverKind={ProviderDriverKind.make("claudeAgent")}
+              displayName="Claude Code"
+              iconClassName="size-3"
+            />
+          </span>
         ) : null}
       </span>
       <span className="flex size-4 items-center justify-center">
-        {sources?.includes("codex") ? <OpenAI className="size-3" aria-label="Codex" /> : null}
+        {sources?.includes("codex") ? (
+          <span role="img" aria-label="Codex">
+            <ProviderInstanceIcon
+              driverKind={ProviderDriverKind.make("codex")}
+              displayName="Codex"
+              iconClassName="size-3"
+            />
+          </span>
+        ) : null}
       </span>
       <span className="text-right">{threadCount}</span>
       <span className="text-right whitespace-nowrap">{age}</span>

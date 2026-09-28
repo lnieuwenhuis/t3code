@@ -1,6 +1,6 @@
-// Minimal codex app-server stand-in for runtime-level collab tests.
-// Speaks just enough of the protocol for CodexSessionRuntime to start a
-// session, using REAL captured responses (codexMultiAgentWire.json), then
+// Minimal codex app-server stand-in, spawned as the Codex binary by the
+// provider readiness probe tests. Answers the handshake and, for session
+// requests, returns REAL captured responses (codexMultiAgentWire.json), then
 // replays a scripted multi-agent notification sequence read from the
 // T3_CODEX_COLLAB_SCRIPT env var (a JSON file path) when the first turn
 // starts. Runs as a plain Node process — stdlib only.
@@ -18,8 +18,6 @@ const script = JSON.parse(NodeFS.readFileSync(process.env.T3_CODEX_COLLAB_SCRIPT
 const write = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 let turnStartCount = 0;
 let activeTurn;
-const resumeCounts = new Map();
-
 // Server->client requests the runtime must answer (approval prompts), keyed
 // by the numeric JSON-RPC id this peer allocated for them.
 const openServerRequests = new Map();
@@ -86,7 +84,18 @@ rl.on("line", (line) => {
     return;
   }
   if (method === "account/read") {
-    write({ id, result: { account: { type: "apiKey" }, requiresOpenaiAuth: false } });
+    write({
+      id,
+      result: { account: script.account ?? { type: "apiKey" }, requiresOpenaiAuth: false },
+    });
+    return;
+  }
+  if (method === "account/rateLimits/read" && script.failRateLimitsRead) {
+    write({ id, error: { code: -32000, message: "usage unavailable" } });
+    return;
+  }
+  if (method === "account/rateLimitResetCredit/consume" && script.resetCreditOutcome) {
+    write({ id, result: { outcome: script.resetCreditOutcome } });
     return;
   }
   if (method === "skills/list" || method === "model/list") {
@@ -97,6 +106,14 @@ rl.on("line", (line) => {
     write({ id, result: fixture.responses.threadStart });
     return;
   }
+  if (method === "thread/inject_items" && script.recordRequests) {
+    NodeFS.appendFileSync(
+      `${process.env.T3_CODEX_COLLAB_SCRIPT}.requests`,
+      `${JSON.stringify({ method, params: message.params })}\n`,
+    );
+    write({ id, result: {} });
+    return;
+  }
   if (method === "thread/resume") {
     if (script.recordRequests) {
       NodeFS.appendFileSync(
@@ -105,12 +122,7 @@ rl.on("line", (line) => {
       );
     }
     const threadId = message.params?.threadId;
-    const snapshots = script.childResumeSnapshots?.[threadId];
-    const attempt = resumeCounts.get(threadId) ?? 0;
-    resumeCounts.set(threadId, attempt + 1);
-    const childSnapshot = Array.isArray(snapshots)
-      ? snapshots[Math.min(attempt, snapshots.length - 1)]
-      : snapshots;
+    const childSnapshot = script.childResumeSnapshots?.[threadId];
     if (script.resumeRequestMarker) {
       write({
         jsonrpc: "2.0",

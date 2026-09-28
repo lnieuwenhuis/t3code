@@ -32,6 +32,8 @@ import {
 import { ANTIGRAVITY_AUTH_BROWSER_MARKER } from "./antigravityAuthSupport.ts";
 import type { AntigravityReleaseAsset } from "./antigravityRelease.ts";
 
+import antigravityInitialize from "../../../../packages/effect-acp/test/fixtures/antigravity-initialize.json" with { type: "json" };
+
 const serverContents = "antigravity runtime\n";
 const harnessContents = "local harness\n";
 const previousReleaseId = "1".repeat(64);
@@ -306,10 +308,25 @@ it.layer(NodeServices.layer)("Antigravity installation", (it) => {
 
   it.effect.each([
     {
-      name: "the expected release",
+      name: "the expected release with protocol 1",
+      protocolVersion: 1,
       agentName: "antigravity-acp",
       version: "fixture-new",
       valid: true,
+    },
+    {
+      name: "the expected release with protocol 2 and legacy fields",
+      protocolVersion: 2,
+      agentName: "antigravity-acp",
+      version: "fixture-new",
+      valid: true,
+    },
+    {
+      name: "an unsupported protocol version",
+      protocolVersion: 3,
+      agentName: "antigravity-acp",
+      version: "fixture-new",
+      valid: false,
     },
     { name: "a different agent", agentName: "other-agent", version: "fixture-new", valid: false },
     {
@@ -342,6 +359,8 @@ it.layer(NodeServices.layer)("Antigravity installation", (it) => {
           if (!profile) return yield* Effect.die("Expected a disposable validation profile.");
           profiles.add(profile);
           const helper = command.args[0] === "-e";
+          // The runtime unpacks straight into the disposable profile.
+          if (!helper) expect(command.options.env?.TMPDIR).toBe(profile);
           const output = yield* Queue.unbounded<Uint8Array>();
           const exited = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
           const terminate = Deferred.succeed(exited, ChildProcessSpawner.ExitCode(0)).pipe(
@@ -380,14 +399,9 @@ it.layer(NodeServices.layer)("Antigravity installation", (it) => {
                       ...(request.method === "initialize"
                         ? {
                             result: {
-                              protocolVersion: 1,
+                              ...antigravityInitialize,
+                              protocolVersion: testCase.protocolVersion ?? 2,
                               agentInfo: { name: testCase.agentName, version: testCase.version },
-                              agentCapabilities: {
-                                loadSession: true,
-                                sessionCapabilities: { resume: {} },
-                                auth: { logout: {} },
-                              },
-                              authMethods: [{ id: "oauth-personal", name: "Google" }],
                             },
                           }
                         : {
@@ -718,7 +732,9 @@ it.layer(NodeServices.layer)("Antigravity installation", (it) => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-agy-path-test-" });
+        const baseDir = yield* fs
+          .makeTempDirectoryScoped({ prefix: "t3-agy-path-test-" })
+          .pipe(Effect.flatMap((directory) => fs.realPath(directory)));
         const externalDirectory = path.join(baseDir, "external");
         const externalExecutable = path.join(externalDirectory, executableName);
         const externalHarness = path.join(externalDirectory, harnessName);

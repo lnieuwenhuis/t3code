@@ -20,12 +20,9 @@ import {
   DEFAULT_TEXT_GENERATION_REASONING_EFFORT,
   ProviderOptionSelections,
 } from "./model.ts";
-import {
-  DEFAULT_RUNTIME_MODE,
-  ModelSelection,
-  ProjectScript,
-  RuntimeMode,
-} from "./orchestration.ts";
+import { ModelSelection } from "./modelSelection.ts";
+import { ProjectScript } from "./project.ts";
+import { DEFAULT_RUNTIME_MODE, RuntimeMode } from "./providerPolicy.ts";
 import { BrowserProfile, BrowserProfileId, DEFAULT_BROWSER_PROFILE_ID } from "./browserProfile.ts";
 import {
   DEFAULT_PREVIEW_APPEARANCE,
@@ -291,6 +288,10 @@ export const LoadBalancingWeights = Schema.Record(
 
 export const DiffColorScheme = Schema.Literals(["red-green", "blue-orange"]);
 
+/** Maximum width of the chat timeline and composer on wide screens. */
+export const ChatWidth = Schema.Literals(["comfortable", "wide", "full"]);
+export type ChatWidth = typeof ChatWidth.Type;
+
 export const ClientSettingsSchema = Schema.Struct({
   notificationMode: NotificationMode.pipe(
     Schema.withDecodingDefault(Effect.succeed("off" as const)),
@@ -299,6 +300,7 @@ export const ClientSettingsSchema = Schema.Struct({
   diffColorScheme: DiffColorScheme.pipe(
     Schema.withDecodingDefault(Effect.succeed("red-green" as const)),
   ),
+  chatWidth: ChatWidth.pipe(Schema.withDecodingDefault(Effect.succeed("comfortable" as const))),
   loadBalancingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   loadBalancingWeights: LoadBalancingWeights.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   appearanceContrast: AppearanceContrast.pipe(
@@ -400,6 +402,9 @@ export const ClientSettingsSchema = Schema.Struct({
   // empty workspace before it treats the client as a fresh install.
   onboardingCompletedAt: Schema.NullOr(Schema.String).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  persistComposerContextStrip: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
   ),
   // Model favorites. Historically keyed by provider kind, now
   // widened to `ProviderInstanceId` so users can favorite a specific model
@@ -697,23 +702,13 @@ export const CursorSettings = makeProviderSettingsSchema(
       Schema.withDecodingDefault(Effect.succeed(false)),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
-    binaryPath: makeBinaryPathSetting("cursor-agent").pipe(
-      Schema.annotateKey({
-        title: "Binary path",
-        description: "Path to the Cursor agent binary.",
-        providerSettingsForm: { placeholder: "cursor-agent", clearWhenEmpty: "omit" },
-      }),
+    // Keep V1's CLI configuration when V2 rewrites the shared settings file.
+    // V2's Cursor SDK does not use these fields.
+    binaryPath: Schema.optionalKey(TrimmedString).pipe(
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
-    apiEndpoint: TrimmedString.pipe(
-      Schema.withDecodingDefault(Effect.succeed("")),
-      Schema.annotateKey({
-        title: "API endpoint",
-        description: "Override the Cursor API endpoint for this instance.",
-        providerSettingsForm: {
-          placeholder: "https://...",
-          clearWhenEmpty: "omit",
-        },
-      }),
+    apiEndpoint: Schema.optionalKey(TrimmedString).pipe(
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
     customModels: Schema.Array(CustomModelSetting).pipe(
       Schema.withDecodingDefault(Effect.succeed([])),
@@ -721,7 +716,7 @@ export const CursorSettings = makeProviderSettingsSchema(
     ),
   },
   {
-    order: ["binaryPath", "apiEndpoint"],
+    order: [],
   },
 );
 export type CursorSettings = typeof CursorSettings.Type;
@@ -833,6 +828,89 @@ export const AntigravitySettings = makeProviderSettingsSchema(
 );
 export type AntigravitySettings = typeof AntigravitySettings.Type;
 
+export const PiSettings = makeProviderSettingsSchema(
+  {
+    // Disabled by default while Pi support is Early Access.
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("pi").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the Pi coding agent binary.",
+        providerSettingsForm: { placeholder: "pi", clearWhenEmpty: "omit" },
+      }),
+    ),
+    launchArgs: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Launch arguments",
+        description: "Additional CLI arguments passed to pi --mode rpc on session start.",
+        providerSettingsForm: { clearWhenEmpty: "omit" },
+      }),
+    ),
+    customModels: Schema.Array(CustomModelSetting).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  {
+    order: ["binaryPath", "launchArgs"],
+  },
+);
+export type PiSettings = typeof PiSettings.Type;
+
+export const AcpRegistryDistributionPreference = Schema.Literals(["auto", "binary", "npx", "uvx"]);
+export type AcpRegistryDistributionPreference = typeof AcpRegistryDistributionPreference.Type;
+
+export const AcpRegistrySettings = makeProviderSettingsSchema(
+  {
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(true)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    agentId: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Registry agent ID",
+        description: "Agent identifier from the official ACP Registry, for example 'devin'.",
+        providerSettingsForm: { placeholder: "devin", clearWhenEmpty: "persist" },
+      }),
+    ),
+    commandPath: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Executable override",
+        description:
+          "Optional local executable to use instead of installing the registry distribution. Registry arguments and environment are still applied.",
+        providerSettingsForm: { placeholder: "Registry default", clearWhenEmpty: "omit" },
+      }),
+    ),
+    authMethodId: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Authentication method",
+        description:
+          "Optional ACP authentication method ID. By default, the first agent-managed method is selected.",
+        providerSettingsForm: { placeholder: "auto", clearWhenEmpty: "omit" },
+      }),
+    ),
+    distribution: AcpRegistryDistributionPreference.pipe(
+      Schema.withDecodingDefault(Effect.succeed("auto")),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    customModels: Schema.Array(Schema.String).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  {
+    order: ["agentId", "commandPath", "authMethodId"],
+  },
+);
+export type AcpRegistrySettings = typeof AcpRegistrySettings.Type;
+
 export const OpenCodeSettings = makeProviderSettingsSchema(
   {
     // Off by default (like Cursor and Grok): the binding is not yet stable
@@ -925,6 +1003,15 @@ export const SourceControlWritingStyleSettings = Schema.Struct({
 });
 export type SourceControlWritingStyleSettings = typeof SourceControlWritingStyleSettings.Type;
 
+export const BranchNamingMode = Schema.Literals(["static", "semantic", "custom"]);
+export type BranchNamingMode = typeof BranchNamingMode.Type;
+
+export interface BranchNamingOptions {
+  mode: BranchNamingMode;
+  prefix: string;
+  instructions: string;
+}
+
 export const DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL = Duration.seconds(30);
 export const DEFAULT_PROVIDER_HEALTH_REFRESH_INTERVAL = Duration.minutes(5);
 
@@ -968,20 +1055,19 @@ export const BackgroundActivitySettings = Schema.Struct({
 export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
 
 /**
+ * How assistant text reaches clients while a turn runs.
+ * - `turn`: hold the whole message until the turn finishes or pauses.
+ * - `paragraph`: deliver each finished paragraph or closed code block.
+ */
+export const ResponseStreamingMode = Schema.Literals(["turn", "paragraph"]);
+export type ResponseStreamingMode = typeof ResponseStreamingMode.Type;
+
+/**
  * Server settings a project may override. Every other server setting is
  * environment-wide: providers, keybindings, observability, device hosts,
  * background activity, theme. UI, search and the write planner derive
  * eligibility from this list, so adding a key here is the whole opt-in.
  */
-/**
- * How assistant text reaches clients while a turn runs.
- * - `turn`: hold the whole message until the turn finishes or pauses.
- * - `paragraph`: deliver each finished paragraph or closed code block.
- * - `token`: forward every provider delta. Legacy, kept for compatibility.
- */
-export const ResponseStreamingMode = Schema.Literals(["turn", "paragraph", "token"]);
-export type ResponseStreamingMode = typeof ResponseStreamingMode.Type;
-
 const StorageRetentionDays = Schema.NullOr(
   Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 3650 })),
 );
@@ -1016,6 +1102,9 @@ export const PROJECT_SCOPED_SERVER_SETTING_KEYS = [
   "textGenerationModelSelection",
   "sourceControlWriterModelSelection",
   "sourceControlWritingStyle",
+  "branchNamingMode",
+  "branchNamePrefix",
+  "branchNameInstructions",
   "pullRequestMergeMethod",
   "sidebarAutoSettleOnMerge",
   "sidebarAutoSettleAfterDays",
@@ -1043,6 +1132,9 @@ export const ProjectSettingsOverrides = Schema.Struct({
   textGenerationModelSelection: Schema.optionalKey(ModelSelection),
   sourceControlWriterModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
   sourceControlWritingStyle: Schema.optionalKey(SourceControlWritingStyleSettings),
+  branchNamingMode: Schema.optionalKey(BranchNamingMode),
+  branchNamePrefix: Schema.optionalKey(TrimmedString),
+  branchNameInstructions: Schema.optionalKey(TrimmedString),
   pullRequestMergeMethod: Schema.optionalKey(Schema.NullOr(PullRequestMergeMethod)),
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
@@ -1086,14 +1178,8 @@ export type StorageCleanupSettings = typeof StorageCleanupSettings.Type;
 export const ServerSettings = Schema.Struct({
   worktreeCleanup: WorktreeCleanup.pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   storageCleanup: StorageCleanupSettings.pipe(
-    Schema.withDecodingDefault(
-      Effect.succeed(Schema.decodeUnknownSync(StorageCleanupSettings)({})),
-    ),
+    Schema.withDecodingDefault(Effect.succeed(Schema.decodeSync(StorageCleanupSettings)({}))),
   ),
-  // How assistant text reaches clients during a turn. Deliberately a fresh
-  // key (was `enableLegacyTokenStreaming`, before that
-  // `enableAssistantStreaming`): decoding drops the old key, so everyone,
-  // including prior token-streaming opt-ins, resets to the paragraph default.
   responseStreamingMode: ResponseStreamingMode.pipe(
     Schema.withDecodingDefault(Effect.succeed("paragraph" as const)),
   ),
@@ -1168,6 +1254,8 @@ export const ServerSettings = Schema.Struct({
   sidebarAutoSettleAfterDays: Schema.NullOr(SidebarAutoSettleAfterDays).pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS)),
   ),
+  snoozeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  autoResumeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   sidebarAutoSettleOnMerge: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   backgroundActivity: BackgroundActivitySettings,
   // Legacy flat fields retained for old settings files and old clients. New
@@ -1240,6 +1328,11 @@ export const ServerSettings = Schema.Struct({
       }),
     ),
   ),
+  branchNamingMode: BranchNamingMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed("static" as const)),
+  ),
+  branchNamePrefix: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed("t3code"))),
+  branchNameInstructions: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   sourceControlWritingStyle: SourceControlWritingStyleSettings.pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
@@ -1266,6 +1359,7 @@ export const ServerSettings = Schema.Struct({
     claudeAgent: ClaudeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     cursor: CursorSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     grok: GrokSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    pi: PiSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     opencode: OpenCodeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     antigravity: AntigravitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
@@ -1282,6 +1376,10 @@ export const ServerSettings = Schema.Struct({
   // this build cannot decode round-trip untouched, as provider instances do.
   usageLimitSources: Schema.Record(UsageLimitSourceId, UsageLimitSourceConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+  /** Allows this server to read the Cursor CLI's macOS Keychain login for account usage. */
+  cursorKeychainUsageEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
   ),
   /** Exact model IDs, applied to past and future usage on this environment. */
   usagePriceOverrides: Schema.Record(TrimmedNonEmptyString, UsageModelPriceOverride).pipe(
@@ -1339,6 +1437,7 @@ export const resolveProviderInstanceEnabled = (
 export const ServerSettingsOperation = Schema.Literals([
   "normalize",
   "check-exists",
+  "create-provider-instance",
   "read-file",
   "read-provider-history",
   "read-project-settings",
@@ -1358,7 +1457,9 @@ export class ServerSettingsError extends Schema.TaggedError<ServerSettingsError>
     operation: ServerSettingsOperation,
     providerInstanceId: Schema.optional(Schema.String),
     environmentVariable: Schema.optional(Schema.String),
-    cause: Schema.Defect(),
+    // Validation failures (e.g. a create colliding with an existing
+    // instance) originate without an upstream defect.
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
@@ -1412,8 +1513,6 @@ const ClaudeSettingsPatch = Schema.Struct({
 
 const CursorSettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
-  binaryPath: Schema.optionalKey(TrimmedString),
-  apiEndpoint: Schema.optionalKey(TrimmedString),
   customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
 });
 
@@ -1430,6 +1529,13 @@ const AntigravitySettingsPatch = Schema.Struct({
   gcpProject: Schema.optionalKey(TrimmedString),
   gcpLocation: Schema.optionalKey(TrimmedString),
   binaryPath: Schema.optionalKey(TrimmedString),
+  customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
+});
+
+const PiSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  launchArgs: Schema.optionalKey(TrimmedString),
   customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
 });
 
@@ -1502,6 +1608,8 @@ export const ServerSettingsPatch = Schema.Struct({
   deviceHosts: Schema.optionalKey(SshDeviceHostConfigs),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
+  autoResumeLimitedThreads: Schema.optionalKey(Schema.Boolean),
+  snoozeLimitedThreads: Schema.optionalKey(Schema.Boolean),
   backgroundActivity: Schema.optionalKey(
     Schema.Struct({
       schemaVersion: Schema.optionalKey(Schema.Literal(1)),
@@ -1519,6 +1627,9 @@ export const ServerSettingsPatch = Schema.Struct({
   worktreeSubmodules: Schema.optionalKey(Schema.NullOr(WorktreeSubmodules)),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
+  branchNamingMode: Schema.optionalKey(BranchNamingMode),
+  branchNamePrefix: Schema.optionalKey(TrimmedString),
+  branchNameInstructions: Schema.optionalKey(TrimmedString),
   sourceControlWritingStyle: Schema.optionalKey(
     Schema.Struct({
       mode: Schema.optionalKey(SourceControlWritingStyleMode),
@@ -1541,6 +1652,7 @@ export const ServerSettingsPatch = Schema.Struct({
       claudeAgent: Schema.optionalKey(ClaudeSettingsPatch),
       cursor: Schema.optionalKey(CursorSettingsPatch),
       grok: Schema.optionalKey(GrokSettingsPatch),
+      pi: Schema.optionalKey(PiSettingsPatch),
       opencode: Schema.optionalKey(OpenCodeSettingsPatch),
       antigravity: Schema.optionalKey(AntigravitySettingsPatch),
     }),
@@ -1556,6 +1668,7 @@ export const ServerSettingsPatch = Schema.Struct({
   usageLimitSources: Schema.optionalKey(
     Schema.Record(UsageLimitSourceId, Schema.NullOr(UsageLimitSourceConfig)),
   ),
+  cursorKeychainUsageEnabled: Schema.optionalKey(Schema.Boolean),
   /** Each entry replaces one model's rates; `null` restores automatic pricing. */
   usagePriceOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, Schema.NullOr(UsageModelPriceOverride)),
@@ -1567,6 +1680,7 @@ export const ClientSettingsPatch = Schema.Struct({
   notificationMode: Schema.optionalKey(NotificationMode),
   inAppNotificationsEnabled: Schema.optionalKey(Schema.Boolean),
   diffColorScheme: Schema.optionalKey(DiffColorScheme),
+  chatWidth: Schema.optionalKey(ChatWidth),
   loadBalancingEnabled: Schema.optionalKey(Schema.Boolean),
   loadBalancingWeights: Schema.optionalKey(LoadBalancingWeights),
   appearanceContrast: Schema.optionalKey(AppearanceContrast),
@@ -1600,6 +1714,7 @@ export const ClientSettingsPatch = Schema.Struct({
   fontFamilySans: Schema.optionalKey(FontFamilyPreference),
   fontFamilyTerminal: Schema.optionalKey(FontFamilyPreference),
   fontSmoothing: Schema.optionalKey(Schema.Boolean),
+  persistComposerContextStrip: Schema.optionalKey(Schema.Boolean),
   favorites: Schema.optionalKey(
     Schema.Array(
       Schema.Struct({

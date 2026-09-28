@@ -30,6 +30,7 @@ const reads = new Set<string>([
   WS_METHODS.pullRequestsStack,
   WS_METHODS.pullRequestsDetail,
   WS_METHODS.pullRequestsPreview,
+  WS_METHODS.pullRequestsChecks,
   WS_METHODS.pullRequestsActivity,
   WS_METHODS.pullRequestsThreadComments,
   WS_METHODS.pullRequestsDiffFileContents,
@@ -252,7 +253,18 @@ export function createPullRequestRouter() {
       const connected = yield* registry
         .run(id, EnvironmentSupervisor.pipe(Effect.flatMap((s) => SubscriptionRef.get(s.session))))
         .pipe(Effect.orElseSucceed(() => Option.none()));
-      if (Option.isSome(connected)) alternatives.push({ id, local: isLocal(entry) });
+      if (Option.isNone(connected)) continue;
+      if (tag === WS_METHODS.pullRequestsChecks) {
+        const supported = yield* connected.value.initialConfig.pipe(
+          Effect.map((config) => config.environment.capabilities.pullRequestChecks === true),
+          Effect.timeout("2 seconds"),
+          Effect.catchCause((cause) =>
+            Cause.hasInterrupts(cause) ? Effect.interrupt : Effect.succeed(false),
+          ),
+        );
+        if (!supported) continue;
+      }
+      alternatives.push({ id, local: isLocal(entry) });
     }
     if (alternatives.length === 0) return yield* finish(source);
 
@@ -339,15 +351,11 @@ export function createPullRequestRouter() {
         }
         const operation = run(id);
         return yield* (reads.has(tag) ? operation.pipe(readTimeout(id)) : operation).pipe(
-          Effect.catch((error) => {
-            if (
-              (reads.has(tag) || rejectedBeforeDispatch(error)) &&
-              index + 1 < candidates.length
-            ) {
-              return visit(index + 1);
-            }
-            return Effect.fail(error);
-          }),
+          Effect.catchIf(
+            (error) =>
+              (reads.has(tag) || rejectedBeforeDispatch(error)) && index + 1 < candidates.length,
+            () => visit(index + 1),
+          ),
           Effect.map((result) =>
             typeof result === "object" && result !== null && "projectId" in result
               ? {

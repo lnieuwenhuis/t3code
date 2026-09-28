@@ -549,7 +549,9 @@ function trace2ChildKey(record: Record<string, unknown>): string | null {
 const Trace2Record = Schema.Record(Schema.String, Schema.Unknown);
 const decodeTrace2Record = decodeJsonResult(Trace2Record);
 
-const createTrace2Monitor = Effect.fn("createTrace2Monitor")(function* (
+// Untraced because it runs on every git spawn and returns at once without hook
+// callbacks. Its errors fail the runGitCommand span.
+const createTrace2Monitor = Effect.fnUntraced(function* (
   input: Pick<GitVcsDriver.ExecuteGitInput, "operation" | "cwd" | "args">,
   progress: GitVcsDriver.ExecuteGitProgress | undefined,
 ): Effect.fn.Return<
@@ -946,16 +948,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       return yield* execution.pipe(
         Effect.timeoutOption(timeoutMs),
         Effect.flatMap((result) =>
-          Option.match(result, {
-            onNone: () =>
-              Effect.fail(
-                new GitCommandError({
-                  ...gitCommandContext(commandInput),
-                  detail: "Git command timed out.",
-                }),
-              ),
-            onSome: Effect.succeed,
-          }),
+          Effect.fromOption(
+            result,
+            () =>
+              new GitCommandError({
+                ...gitCommandContext(commandInput),
+                detail: "Git command timed out.",
+              }),
+          ),
         ),
       );
     },
@@ -1004,11 +1004,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         : {}),
       ...(options.progress ? { progress: options.progress } : {}),
     }).pipe(
-      Effect.flatMap((result) => {
-        if (options.allowNonZeroExit || result.exitCode === 0) {
-          return Effect.succeed(result);
-        }
-        return Effect.fail(
+      Effect.filterOrFail(
+        (result) => options.allowNonZeroExit || result.exitCode === 0,
+        (result) =>
           new GitCommandError({
             ...gitCommandContext({ operation, cwd, args }),
             detail: options.fallbackErrorDetail ?? "Git command exited with a non-zero status.",
@@ -1016,8 +1014,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             stdoutLength: result.stdout.length,
             stderrLength: result.stderr.length,
           }),
-        );
-      }),
+      ),
     );
 
   const executeGitWithStableDiagnostics = (
@@ -1130,10 +1127,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   ): Effect.Effect<void, GitCommandError> => {
     const fetchCwd =
       path.basename(gitCommonDir) === ".git" ? path.dirname(gitCommonDir) : gitCommonDir;
+    // `--no-auto-gc` (a synonym of `--no-auto-maintenance` that older Git also knows) keeps
+    // this poll from starting `git gc --auto`. When that gc fails, for example on a repository
+    // with missing objects, Git retries it on every fetch and leaves a full-size `tmp_pack_*`
+    // behind each time, so a background poll could fill the disk.
     return executeGit(
       "GitVcsDriver.fetchRemoteForStatus",
       fetchCwd,
-      ["--git-dir", gitCommonDir, "fetch", "--quiet", "--no-tags", remoteName],
+      ["--git-dir", gitCommonDir, "fetch", "--quiet", "--no-tags", "--no-auto-gc", remoteName],
       {
         env: STATUS_UPSTREAM_REFRESH_ENV,
         fallbackErrorDetail: "Background Git fetch exited with a non-zero status.",
@@ -1692,7 +1693,17 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     };
   });
 
-  const readStatusDetailsLocal = Effect.fn("readStatusDetailsLocal")(function* (cwd: string) {
+  const readStatusDetailsLocal = Effect.fn("readStatusDetailsLocal")(function* (
+    cwd: string,
+    options?: GitVcsDriver.GitLocalStatusOptions,
+  ) {
+    const includeDivergence = options?.includeDivergence !== false;
+    const statusArgs = [
+      "status",
+      "--porcelain=2",
+      "--branch",
+      ...(includeDivergence ? [] : ["--no-ahead-behind"]),
+    ];
     const indexResult = yield* executeGitWithStableDiagnostics(
       "GitVcsDriver.statusDetails.indexPath",
       cwd,
@@ -1732,7 +1743,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const statusResult = yield* executeGitWithStableDiagnostics(
       "GitVcsDriver.statusDetails.status",
       cwd,
-      ["status", "--porcelain=2", "--branch"],
+      statusArgs,
       {
         allowNonZeroExit: true,
       },
@@ -1755,7 +1766,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         ...gitCommandContext({
           operation: "GitVcsDriver.statusDetails.status",
           cwd,
-          args: ["status", "--porcelain=2", "--branch"],
+          args: statusArgs,
         }),
         detail: "Git status failed.",
         exitCode: statusResult.exitCode,
@@ -1855,7 +1866,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         upstreamRef = value.length > 0 ? value : null;
         continue;
       }
-      if (line.startsWith("# branch.ab ")) {
+      if (includeDivergence && line.startsWith("# branch.ab ")) {
         const value = line.slice("# branch.ab ".length).trim();
         const parsed = parseBranchAb(value);
         aheadCount = parsed.ahead;
@@ -1870,7 +1881,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
 
     const fallbackAheadCount =
-      !upstreamRef && refName
+      includeDivergence && !upstreamRef && refName
         ? yield* computeAheadCountAgainstBase(cwd, refName).pipe(Effect.orElseSucceed(() => 0))
         : null;
 
@@ -1883,7 +1894,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       refName !== null &&
       (refName === defaultBranch ||
         (defaultBranch === null && (refName === "main" || refName === "master")));
-    if (refName && !isDefaultBranch) {
+    if (includeDivergence && refName && !isDefaultBranch) {
       aheadOfDefaultCount =
         fallbackAheadCount !== null
           ? fallbackAheadCount
@@ -1933,8 +1944,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
   const statusDetailsLocal: GitVcsDriver.GitVcsDriver["Service"]["statusDetailsLocal"] = Effect.fn(
     "statusDetailsLocal",
-  )(function* (cwd) {
-    return yield* readStatusDetailsLocal(cwd);
+  )(function* (cwd, options) {
+    return yield* readStatusDetailsLocal(cwd, options);
   });
 
   const statusDetails: GitVcsDriver.GitVcsDriver["Service"]["statusDetails"] = Effect.fn(
@@ -2360,7 +2371,16 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       prefix: `t3code-review-index-${process.pid}-`,
     });
     const indexExists = yield* fileSystem.exists(indexPath);
-    if (indexExists) yield* fileSystem.copyFile(indexPath, tempIndexPath);
+    if (indexExists) {
+      const { mtime } = yield* fileSystem.stat(indexPath);
+      yield* fileSystem.copyFile(indexPath, tempIndexPath);
+      // Node FileSystem.stat truncates bigint timestamps to milliseconds before creating its Date.
+      // Flooring preserves the source second without making preceding-second files racy.
+      const indexTime = Option.isSome(mtime)
+        ? Math.max(0, Math.floor(mtime.value.getTime() / 1000))
+        : 0;
+      yield* fileSystem.utimes(tempIndexPath, indexTime, indexTime);
+    }
     const env = { GIT_INDEX_FILE: tempIndexPath } satisfies NodeJS.ProcessEnv;
     const tempIndexConfig = [
       "-c",
@@ -3484,13 +3504,29 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     });
   });
 
+  const deleteLocalBranch: GitVcsDriver.GitVcsDriver["Service"]["deleteLocalBranch"] = Effect.fn(
+    "deleteLocalBranch",
+  )(function* (input) {
+    yield* executeGit(
+      "GitVcsDriver.deleteLocalBranch",
+      input.cwd,
+      ["branch", input.force === true ? "-D" : "-d", "--", input.refName],
+      {
+        timeoutMs: 10_000,
+        fallbackErrorDetail: "git branch delete failed",
+      },
+    );
+  });
+
   const renameBranch: GitVcsDriver.GitVcsDriver["Service"]["renameBranch"] = Effect.fn(
     "renameBranch",
   )(function* (input) {
     if (input.oldBranch === input.newBranch) {
       return { branch: input.newBranch };
     }
-    const targetBranch = yield* resolveAvailableBranchName(input.cwd, input.newBranch);
+    const targetBranch = input.exactName
+      ? input.newBranch
+      : yield* resolveAvailableBranchName(input.cwd, input.newBranch);
 
     yield* executeGit(
       "GitVcsDriver.renameBranch",
@@ -3693,6 +3729,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     setBranchUpstream: (input) => withListRefsInvalidation(input.cwd, setBranchUpstream(input)),
     removeWorktree: (input) => withListRefsInvalidation(input.cwd, removeWorktree(input)),
     pruneWorktrees: (input) => withListRefsInvalidation(input.cwd, pruneWorktrees(input)),
+    deleteLocalBranch: (input) => withListRefsInvalidation(input.cwd, deleteLocalBranch(input)),
     renameBranch: (input) => withListRefsInvalidation(input.cwd, renameBranch(input)),
     createRef: (input) => withListRefsInvalidation(input.cwd, createRef(input)),
     switchRef: (input) => withListRefsInvalidation(input.cwd, switchRef(input)),

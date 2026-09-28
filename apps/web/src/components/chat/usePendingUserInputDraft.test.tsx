@@ -111,6 +111,13 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 describe("pending answer draft ownership through mounted navigation", () => {
+  it("returns every typed answer to the draft when an async question is dismissed", async () => {
+    await act(() => composer.edit("first unsent answer"));
+    await act(() => composer.edit("second unsent answer", "question-two"));
+    // V2 dismissal removes the request without submitting its answers.
+    await navigate(threadA, false);
+    expect(prompt()).toBe("first unsent answer\n\nsecond unsent answer");
+  });
   it("does not resurrect an erased carried answer after A to B to A and Stop", async () => {
     const initialTarget = composer.target;
     await navigate(threadB, false);

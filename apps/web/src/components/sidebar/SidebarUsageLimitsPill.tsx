@@ -1,12 +1,12 @@
 import { useAtomValue } from "@effect/atom-react";
 import { formatDuration } from "@t3tools/shared/usageLimits";
 import { useNavigate } from "@tanstack/react-router";
-import { GaugeIcon } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 
 import { useClientSettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import { environmentPresentations } from "../../state/presentation";
+import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { getDriverOption } from "../settings/providerDriverMeta";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { useSidebar } from "../ui/sidebar";
@@ -73,7 +73,6 @@ function SidebarLimitSegment({
   readonly onClick: () => void;
 }) {
   const option = getDriverOption(limit.driver);
-  const Mark = option?.icon ?? GaugeIcon;
   const label = option?.label ?? String(limit.driver);
   return (
     <Tooltip>
@@ -90,10 +89,14 @@ function SidebarLimitSegment({
           />
         }
       >
-        <Mark aria-hidden className="size-3.5 shrink-0" />
+        <ProviderInstanceIcon
+          driverKind={limit.driver}
+          displayName={label}
+          iconClassName="size-3.5 shrink-0"
+        />
         <span className="tabular-nums">{limit.remainingPercent}%</span>
       </TooltipTrigger>
-      <TooltipPopup side="top" className="max-w-72 text-xs">
+      <TooltipPopup side="top" className="max-w-72">
         <SidebarLimitDetails label={label} limit={limit} />
       </TooltipPopup>
     </Tooltip>

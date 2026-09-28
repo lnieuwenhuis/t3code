@@ -1,4 +1,4 @@
-import { EnvironmentId, type OrchestrationShellSnapshot } from "@t3tools/contracts";
+import { EnvironmentId, type OrchestrationV2ArchivedShellSnapshot } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
@@ -15,11 +15,11 @@ vi.mock("../state/orchestration", () => ({
 }));
 
 const environmentId = EnvironmentId.make("archive-freshness-test");
-const snapshot: OrchestrationShellSnapshot = {
+const snapshot: OrchestrationV2ArchivedShellSnapshot = {
+  schemaVersion: 1,
   snapshotSequence: 1,
   projects: [],
   threads: [],
-  updatedAt: "2026-09-06T00:00:00.000Z",
 };
 
 afterEach(() => {
