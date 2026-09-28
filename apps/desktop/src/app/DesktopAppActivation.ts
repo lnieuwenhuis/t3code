@@ -5,10 +5,12 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeProcess from "node:process";
 
 import {
   DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION,
   DesktopAppActivationRequest,
+  type DesktopAppActivationReadiness,
   type DesktopAppActivationResponse,
 } from "@t3tools/contracts";
 import { resolveDesktopAppControlAddress } from "@t3tools/shared/desktopAppControl";
@@ -137,7 +139,11 @@ export async function startDesktopAppControlServer(input: {
 
     const finish = (response: DesktopAppActivationResponse) => {
       responseSent = true;
-      if (!socket.destroyed) socket.end(`${JSON.stringify(response)}\n`);
+      const reply =
+        response.ok && "type" in response && response.type === "probe-environment"
+          ? { ...response, desktopPid: NodeProcess.pid }
+          : response;
+      if (!socket.destroyed) socket.end(`${JSON.stringify(reply)}\n`);
     };
 
     socket.on("data", (chunk) => {
@@ -302,7 +308,7 @@ export class DesktopAppActivation extends Context.Service<
   DesktopAppActivation,
   {
     readonly start: Effect.Effect<void, DesktopAppActivationStartError, Scope.Scope>;
-    readonly setRendererReady: (ready: boolean) => Effect.Effect<void>;
+    readonly setRendererReady: (ready: DesktopAppActivationReadiness) => Effect.Effect<void>;
     readonly complete: (response: DesktopAppActivationResponse) => Effect.Effect<void>;
   }
 >()("@t3tools/desktop/app/DesktopAppActivation") {}
@@ -396,9 +402,12 @@ export const make = Effect.gen(function* () {
         };
       }
 
-      broker.registerRenderer((request) => {
-        webContents.send(DESKTOP_APP_ACTIVATION_REQUEST_CHANNEL, request);
-      });
+      broker.registerRenderer(
+        (request) => {
+          webContents.send(DESKTOP_APP_ACTIVATION_REQUEST_CHANNEL, request);
+        },
+        typeof ready === "boolean" ? ready : ready.workspaceReady,
+      );
     }),
     complete: (response) => Effect.sync(() => broker.complete(response)),
   });

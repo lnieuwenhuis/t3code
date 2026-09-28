@@ -1,20 +1,42 @@
 import * as Schema from "effect/Schema";
 
-import { ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { EnvironmentId, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 export const DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION = 1 as const;
 
 export const DesktopAppActivationPlatform = Schema.Literals(["darwin", "linux", "win32"]);
 export type DesktopAppActivationPlatform = typeof DesktopAppActivationPlatform.Type;
 
-export const DesktopAppActivationRequest = Schema.Struct({
+export const DesktopAppOpenWorkspaceRequest = Schema.Struct({
   version: Schema.Literal(DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION),
   requestId: TrimmedNonEmptyString,
   type: Schema.Literal("open-workspace"),
   workspaceRoot: TrimmedNonEmptyString,
   platform: DesktopAppActivationPlatform,
 });
+export type DesktopAppOpenWorkspaceRequest = typeof DesktopAppOpenWorkspaceRequest.Type;
+
+export const DesktopAppEnvironmentProbeRequest = Schema.Struct({
+  version: Schema.Literal(DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION),
+  requestId: TrimmedNonEmptyString,
+  type: Schema.Literal("probe-environment"),
+  environmentId: EnvironmentId,
+  retry: Schema.optionalKey(Schema.Boolean),
+});
+export type DesktopAppEnvironmentProbeRequest = typeof DesktopAppEnvironmentProbeRequest.Type;
+
+export const DesktopAppActivationRequest = Schema.Union([
+  DesktopAppOpenWorkspaceRequest,
+  DesktopAppEnvironmentProbeRequest,
+]);
 export type DesktopAppActivationRequest = typeof DesktopAppActivationRequest.Type;
+
+// Boolean readiness remains supported for older preload clients.
+export const DesktopAppActivationReadiness = Schema.Union([
+  Schema.Boolean,
+  Schema.Struct({ workspaceReady: Schema.Boolean }),
+]);
+export type DesktopAppActivationReadiness = typeof DesktopAppActivationReadiness.Type;
 
 export const DesktopAppActivationErrorCode = Schema.Literals([
   "invalid-request",
@@ -46,7 +68,22 @@ export const DesktopAppActivationFailure = Schema.Struct({
 });
 export type DesktopAppActivationFailure = typeof DesktopAppActivationFailure.Type;
 
+export const DesktopAppEnvironmentProbeSuccess = Schema.Struct({
+  version: Schema.Literal(DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION),
+  requestId: TrimmedNonEmptyString,
+  ok: Schema.Literal(true),
+  type: Schema.Literal("probe-environment"),
+  environmentId: EnvironmentId,
+  serverVersion: TrimmedNonEmptyString,
+  protocolVersion: Schema.Literal(2),
+  /** Added by the socket owner after the renderer completes its probe. */
+  desktopPid: Schema.optionalKey(Schema.Int),
+  projectCount: Schema.Int,
+  threadCount: Schema.Int,
+});
+
 export const DesktopAppActivationResponse = Schema.Union([
+  DesktopAppEnvironmentProbeSuccess,
   DesktopAppActivationSuccess,
   DesktopAppActivationFailure,
 ]);

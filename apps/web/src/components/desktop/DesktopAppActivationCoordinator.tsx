@@ -1,7 +1,12 @@
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import {
+  createRuntimeCommand,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
 import type { DesktopAppActivationRequest } from "@t3tools/contracts";
 import { useEffect, useEffectEvent, useRef } from "react";
 
+import { connectionAtomRuntime } from "../../connection/runtime";
+import { probeDesktopEnvironment } from "../../desktopEnvironmentProbe";
 import { handleDesktopAppActivationRequest } from "../../desktopAppActivation";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { findProjectByPath, inferProjectTitleFromPath } from "../../lib/projectPaths";
@@ -13,7 +18,22 @@ import { useEnvironmentQuery } from "../../state/query";
 import { environmentShell } from "../../state/shell";
 import { useAtomCommand } from "../../state/use-atom-command";
 
+const probeEnvironmentCommand = createRuntimeCommand(connectionAtomRuntime, {
+  label: "desktop:probe-environment",
+  execute: (
+    request: Extract<DesktopAppActivationRequest, { type: "probe-environment" }>,
+    registry,
+  ) =>
+    probeDesktopEnvironment(request, (environmentId) =>
+      registry.get(environmentShell.stateValueAtom(environmentId)),
+    ),
+});
+
 export function DesktopAppActivationCoordinator() {
+  const probeEnvironment = useAtomCommand(probeEnvironmentCommand, {
+    reportFailure: false,
+    reportDefect: false,
+  });
   const primaryEnvironment = usePrimaryEnvironment();
   const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
   const openThread = useNewThreadHandler();
@@ -30,8 +50,20 @@ export function DesktopAppActivationCoordinator() {
     primaryEnvironment.serverConfig !== null &&
     shell.data?.snapshot._tag === "Some";
 
-  const processRequest = useEffectEvent(async (request: DesktopAppActivationRequest) =>
-    handleDesktopAppActivationRequest(request, {
+  const processRequest = useEffectEvent(async (request: DesktopAppActivationRequest) => {
+    if (request.type === "probe-environment") {
+      const result = await probeEnvironment(request);
+      return result._tag === "Success"
+        ? result.value
+        : {
+            version: 1 as const,
+            requestId: request.requestId,
+            ok: false as const,
+            code: "environment-unavailable" as const,
+            message: "The desktop connection runtime is unavailable.",
+          };
+    }
+    return handleDesktopAppActivationRequest(request, {
       getTarget: () => {
         if (
           primaryEnvironment?.connection.phase !== "connected" ||
@@ -71,11 +103,15 @@ export function DesktopAppActivationCoordinator() {
         await waitForProject(projectRef);
       },
       openThread: (projectRef) => openThread(projectRef),
-    }),
+    });
+  });
+
+  const reportReady = useEffectEvent(() =>
+    activation?.setReady({ workspaceReady: ready }).catch(() => undefined),
   );
 
   useEffect(() => {
-    if (!ready || activation === undefined) return;
+    if (activation === undefined) return;
 
     let subscribed = true;
     const unsubscribe = activation.onRequest((request) => {
@@ -87,13 +123,18 @@ export function DesktopAppActivationCoordinator() {
     });
     // Skip readiness if React runs cleanup before this subscription can receive requests.
     queueMicrotask(() => {
-      if (subscribed) void activation.setReady(true).catch(() => undefined);
+      if (subscribed) void reportReady();
     });
     return () => {
       subscribed = false;
       void activation.setReady(false).catch(() => undefined);
       unsubscribe();
     };
+  }, [activation]);
+
+  useEffect(() => {
+    if (activation !== undefined)
+      void activation.setReady({ workspaceReady: ready }).catch(() => undefined);
   }, [activation, ready]);
 
   return null;

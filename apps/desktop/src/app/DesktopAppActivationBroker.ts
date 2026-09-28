@@ -36,6 +36,7 @@ export class DesktopAppActivationBroker {
   readonly #activate: () => void;
   #renderer: RendererSender | null = null;
   #closed = false;
+  #workspaceReady = true;
 
   constructor(input: { readonly requestTimeoutMs: number; readonly activate: () => void }) {
     this.#requestTimeoutMs = input.requestTimeoutMs;
@@ -60,7 +61,7 @@ export class DesktopAppActivationBroker {
           failure(
             request.requestId,
             "request-timeout",
-            "The desktop app did not finish opening the project in time.",
+            "The desktop app did not finish the request in time.",
           ),
         );
       }, this.#requestTimeoutMs);
@@ -72,12 +73,13 @@ export class DesktopAppActivationBroker {
       });
     });
 
-    this.#activate();
+    if (request.type === "open-workspace") this.#activate();
     this.#flush();
     return response;
   }
 
-  registerRenderer(send: RendererSender): void {
+  registerRenderer(send: RendererSender, workspaceReady = true): void {
+    this.#workspaceReady = workspaceReady;
     this.#renderer = send;
     this.#flush();
   }
@@ -90,7 +92,7 @@ export class DesktopAppActivationBroker {
           failure(
             pending.request.requestId,
             "renderer-unavailable",
-            "The T3 Code window closed before it opened the project.",
+            "The T3 Code window closed before it completed the request.",
           ),
         );
       }
@@ -124,6 +126,7 @@ export class DesktopAppActivationBroker {
 
     for (const pending of this.#pending.values()) {
       if (pending.dispatched) continue;
+      if (pending.request.type === "open-workspace" && !this.#workspaceReady) continue;
       try {
         pending.dispatched = true;
         renderer(pending.request);

@@ -1,4 +1,9 @@
-import { ProjectId, ThreadId, type DesktopAppActivationRequest } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProjectId,
+  ThreadId,
+  type DesktopAppActivationRequest,
+} from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { DesktopAppActivationBroker } from "./DesktopAppActivationBroker.ts";
@@ -126,5 +131,38 @@ describe("DesktopAppActivationBroker", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("environment probe readiness", () => {
+  it("probes without a primary environment while workspace requests keep waiting", async () => {
+    const activate = vi.fn();
+    const send = vi.fn();
+    const broker = new DesktopAppActivationBroker({ requestTimeoutMs: 1_000, activate });
+    broker.registerRenderer(send, false);
+    const workspaceResponse = broker.request(request);
+    expect(send).not.toHaveBeenCalled();
+    const probe = {
+      version: 1,
+      requestId: "probe-1",
+      type: "probe-environment",
+      environmentId: EnvironmentId.make("saved"),
+    } as const;
+    const response = broker.request(probe);
+    expect(send).toHaveBeenCalledWith(probe);
+    expect(activate).toHaveBeenCalledTimes(1);
+    broker.complete({
+      version: 1,
+      requestId: probe.requestId,
+      ok: false,
+      code: "environment-unavailable",
+      message: "Not connected.",
+    });
+    await expect(response).resolves.toMatchObject({ ok: false });
+    expect(send).toHaveBeenCalledTimes(1);
+    broker.registerRenderer(send, true);
+    expect(send).toHaveBeenLastCalledWith(request);
+    broker.close();
+    await workspaceResponse;
   });
 });

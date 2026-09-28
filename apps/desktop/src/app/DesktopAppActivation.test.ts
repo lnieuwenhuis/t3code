@@ -3,8 +3,10 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeProcess from "node:process";
 
 import {
+  EnvironmentId,
   ProjectId,
   ThreadId,
   type DesktopAppActivationRequest,
@@ -94,6 +96,19 @@ describe("desktop app control server", () => {
           userId,
           handle: async (input) => {
             received.push(input);
+            if (input.type === "probe-environment")
+              return {
+                version: 1,
+                requestId: input.requestId,
+                ok: true,
+                type: "probe-environment",
+                environmentId: input.environmentId,
+                serverVersion: "0.0.42",
+                protocolVersion: 2,
+                desktopPid: -1,
+                projectCount: 0,
+                threadCount: 0,
+              };
             return {
               version: 1,
               requestId: input.requestId,
@@ -111,6 +126,21 @@ describe("desktop app control server", () => {
 
         expect(received).toHaveLength(1);
         expect(response).toMatchObject({ ok: true, requestId: "request-1" });
+        const probeRequest = {
+          version: 1,
+          requestId: "probe-1",
+          type: "probe-environment",
+          environmentId: EnvironmentId.make("saved"),
+          retry: true,
+        } as const;
+        expect(await exchange(target.address, probeRequest)).toMatchObject({
+          ok: true,
+          type: "probe-environment",
+          environmentId: "saved",
+          protocolVersion: 2,
+          desktopPid: NodeProcess.pid,
+        });
+        expect(received[1]).toEqual(probeRequest);
         await server.close();
         openServers.splice(openServers.indexOf(server), 1);
         if (target.directory !== null) {
