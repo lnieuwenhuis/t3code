@@ -1,4 +1,6 @@
 import * as NodeOS from "node:os";
+// @effect-diagnostics-next-line nodeBuiltinImport:off - Effect's symlink has no type argument; Windows directory links need junctions without elevation.
+import * as NodeFSP from "node:fs/promises";
 
 import { ProviderDriverKind, type CodexSettings } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -227,9 +229,17 @@ const ensureSymlink = Effect.fn("CodexHomeLayout.ensureSymlink")(function* (inpu
     linkPath: link,
   });
 
-  const createLink = input.fileSystem.symlink(target, link).pipe(
-    Effect.catchTags({
-      PlatformError: (cause) =>
+  const createLink = Effect.gen(function* () {
+    if (process.platform === "win32") {
+      const info = yield* input.fileSystem.stat(target);
+      if (info.type === "Directory") {
+        return yield* Effect.tryPromise(() => NodeFSP.symlink(target, link, "junction"));
+      }
+    }
+    yield* input.fileSystem.symlink(target, link);
+  }).pipe(
+    Effect.mapError(
+      (cause) =>
         new CodexShadowHomeFileSystemError({
           sharedHomePath: input.sharedHomePath,
           effectiveHomePath: input.effectiveHomePath,
@@ -239,7 +249,7 @@ const ensureSymlink = Effect.fn("CodexHomeLayout.ensureSymlink")(function* (inpu
           entryName: input.entryName,
           cause,
         }),
-    }),
+    ),
   );
 
   if (state._tag === "NotSymlink") {

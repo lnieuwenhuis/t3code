@@ -85,6 +85,37 @@ it.layer(NodeServices.layer)("CodexHomeLayout", (it) => {
   });
 
   describe("materializeCodexShadowHome", () => {
+    it.effect("shares directories across repeated setup while keeping credentials private", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* makeTempDir("t3code-codex-directory-links-");
+        const sharedHome = path.join(root, "shared");
+        const shadowHome = path.join(root, "shadow");
+        yield* writeTextFile(path.join(sharedHome, "auth.json"), "shared credentials");
+        yield* writeTextFile(path.join(shadowHome, "auth.json"), "private credentials");
+        yield* writeTextFile(path.join(sharedHome, "skills", "example.txt"), "shared skill");
+        const layout = yield* resolveCodexHomeLayout(
+          decodeCodexSettings({ homePath: sharedHome, shadowHomePath: shadowHome }),
+        );
+        yield* materializeCodexShadowHome(layout);
+        yield* materializeCodexShadowHome(layout);
+        expect(
+          yield* fileSystem.readFileString(path.join(shadowHome, "skills", "example.txt")),
+        ).toBe("shared skill");
+        yield* writeTextFile(path.join(shadowHome, "sessions", "session.txt"), "session");
+        expect(
+          yield* fileSystem.readFileString(path.join(sharedHome, "sessions", "session.txt")),
+        ).toBe("session");
+        expect(yield* fileSystem.readFileString(path.join(shadowHome, "auth.json"))).toBe(
+          "private credentials",
+        );
+        expect(yield* fileSystem.readFileString(path.join(sharedHome, "auth.json"))).toBe(
+          "shared credentials",
+        );
+      }),
+    );
+
     it.effect.skipIf(!symlinksSupported)(
       "materializes a shadow home with shared state links and private auth",
       () =>
