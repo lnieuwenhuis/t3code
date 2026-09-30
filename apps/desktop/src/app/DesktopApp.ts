@@ -186,6 +186,12 @@ const bootstrap = Effect.gen(function* () {
     yield* logBootstrapInfo("bootstrap skipping local environment (disabled in settings)");
     if (!(yield* Ref.get(state.quitting))) {
       yield* desktopWindow.createMainIfBackendReady;
+      yield* appActivation.start.pipe(
+        Effect.tap(() => logBootstrapInfo("desktop app control socket ready")),
+        Effect.catch((error) =>
+          logStartupError("desktop app control socket unavailable", { error }),
+        ),
+      );
     }
     return;
   }
