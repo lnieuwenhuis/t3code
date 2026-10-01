@@ -16,17 +16,14 @@ import { usePullRequestRefresh } from "./usePullRequestRefresh";
 
 type Props = Parameters<typeof usePullRequestRefresh>[0];
 const refreshMetadata = vi.fn();
-const refreshActivity = vi.fn();
-const refreshDetail = vi.fn();
 let renderer: ReactTestRenderer | null;
 let props: Props;
 let testNumber = 0;
 
 function PanelReads(input: Props) {
-  const { refreshToken, isInvalidating, refreshFromHost } = usePullRequestRefresh(input);
+  const { isInvalidating, refreshFromHost } = usePullRequestRefresh(input);
   return (
     <>
-      <output>{refreshToken}</output>
       <button disabled={isInvalidating} onClick={refreshFromHost}>
         Refresh
       </button>
@@ -45,10 +42,6 @@ async function render(changes: Partial<Props> = {}) {
     if (renderer) renderer.update(panel);
     else renderer = create(panel);
   });
-}
-
-function diffRefreshes() {
-  return renderer!.root.findByType("output").children.join("");
 }
 
 function invalidation() {
@@ -76,8 +69,6 @@ beforeEach(() => {
   invalidate.mockReset().mockResolvedValue(AsyncResult.success(undefined));
   notify.mockReset();
   refreshMetadata.mockReset();
-  refreshActivity.mockReset();
-  refreshDetail.mockReset();
   props = {
     environmentId: EnvironmentId.make("environment"),
     reference: {
@@ -89,8 +80,6 @@ beforeEach(() => {
     scopeKey: `environment:project:github.com:acme/web#7:test-${++testNumber}`,
     detail: { updatedAt: "2026-09-10T10:00:00Z" },
     refreshMetadata,
-    refreshActivity,
-    refreshDetail,
     forcedRefreshToken: 0,
   };
 });
@@ -102,7 +91,7 @@ afterEach(async () => {
 });
 
 describe("mounted pull request refresh sequencing", () => {
-  it("awaits detail-only poll invalidation and preserves activity and diff for unchanged metadata", async () => {
+  it("awaits detail-only poll invalidation before refreshing metadata", async () => {
     await render();
     expect(invalidate).not.toHaveBeenCalled();
     const pending = invalidation();
@@ -112,16 +101,13 @@ describe("mounted pull request refresh sequencing", () => {
       input: { reference: props.reference, scope: "detail" },
     });
     expect(refreshMetadata).not.toHaveBeenCalled();
-    expect(refreshActivity).not.toHaveBeenCalled();
-    expect(diffRefreshes()).toBe("0");
     await pending.succeed();
     expect(refreshMetadata).toHaveBeenCalledOnce();
     await render({ detail: { ...props.detail! } });
-    expect(refreshActivity).not.toHaveBeenCalled();
-    expect(diffRefreshes()).toBe("0");
+    expect(invalidate).toHaveBeenCalledTimes(1);
   });
 
-  it("awaits full invalidation of a polled revision before refreshing activity and the diff", async () => {
+  it("invalidates a changed polled revision once without an extra metadata read", async () => {
     await render();
     await poll();
     expect(refreshMetadata).toHaveBeenCalledOnce();
@@ -131,40 +117,10 @@ describe("mounted pull request refresh sequencing", () => {
       environmentId: props.environmentId,
       input: { reference: props.reference },
     });
-    expect(refreshActivity).not.toHaveBeenCalled();
-    expect(diffRefreshes()).toBe("0");
     await pending.succeed();
-    expect(refreshActivity).toHaveBeenCalledOnce();
-    expect(diffRefreshes()).toBe("1");
-  });
-
-  it("waits for an activity load that starts during invalidation", async () => {
-    await render();
-    const pending = invalidation();
-    await render({ detail: { updatedAt: "2026-09-10T10:01:00Z" } });
-    await render({ activityPending: true });
-    await pending.succeed();
-    expect(refreshActivity).not.toHaveBeenCalled();
-    expect(diffRefreshes()).toBe("0");
-
-    await render({ activityPending: false });
-    expect(refreshActivity).toHaveBeenCalledOnce();
-    expect(diffRefreshes()).toBe("1");
-  });
-
-  it("discards a queued activity refresh after the pull request changes", async () => {
-    await render();
-    const pending = invalidation();
-    await render({ detail: { updatedAt: "2026-09-10T10:01:00Z" } });
-    await render({ activityPending: true });
-    await pending.succeed();
-    await render({
-      scopeKey: `${props.scopeKey}:other`,
-      reference: { ...props.reference, number: 8 },
-      activityPending: false,
-    });
-    expect(refreshActivity).not.toHaveBeenCalled();
-    expect(diffRefreshes()).toBe("0");
+    expect(invalidate).toHaveBeenCalledTimes(2);
+    expect(refreshMetadata).toHaveBeenCalledOnce();
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it("ignores a completed invalidation superseded by a newer revision", async () => {
@@ -173,12 +129,12 @@ describe("mounted pull request refresh sequencing", () => {
     await render({ detail: { updatedAt: "2026-09-10T10:01:00Z" } });
     const latest = invalidation();
     await render({ detail: { updatedAt: "2026-09-10T10:02:00Z" } });
-    await earlier.succeed();
-    expect(refreshActivity).not.toHaveBeenCalled();
-    expect(diffRefreshes()).toBe("0");
+    await earlier.fail();
     await latest.succeed();
-    expect(refreshActivity).toHaveBeenCalledOnce();
-    expect(diffRefreshes()).toBe("1");
+    expect(invalidate).toHaveBeenCalledTimes(2);
+    expect(notify).not.toHaveBeenCalled();
+    await render({ detail: { ...props.detail! } });
+    expect(invalidate).toHaveBeenCalledTimes(2);
   });
 
   it("ignores a revision invalidation after selecting another pull request", async () => {
@@ -189,33 +145,29 @@ describe("mounted pull request refresh sequencing", () => {
       reference: { ...props.reference, number: 8 },
       scopeKey: `${props.scopeKey}:other`,
     });
-    await pending.succeed();
-    expect(refreshActivity).not.toHaveBeenCalled();
-    expect(diffRefreshes()).toBe("0");
+    await pending.fail();
+    expect(notify).not.toHaveBeenCalled();
   });
 
-  it("does not refresh activity after the panel unmounts during invalidation", async () => {
+  it("does not handle invalidation completion after the panel unmounts", async () => {
     await render();
     const pending = invalidation();
     await render({ detail: { updatedAt: "2026-09-10T10:01:00Z" } });
     await act(async () => renderer!.unmount());
     renderer = null;
-    await pending.succeed();
-    expect(refreshActivity).not.toHaveBeenCalled();
+    await pending.fail();
+    expect(notify).not.toHaveBeenCalled();
   });
 
-  it("keeps activity and diff on failed revision invalidation and retries on the next metadata result", async () => {
+  it("reports failed revision invalidation and retries on the next metadata result", async () => {
     await render();
     const pending = invalidation();
     await render({ detail: { updatedAt: "2026-09-10T10:01:00Z" } });
     await pending.fail();
-    expect(refreshActivity).not.toHaveBeenCalled();
-    expect(diffRefreshes()).toBe("0");
     expect(notify).toHaveBeenCalledWith(expect.objectContaining({ type: "error" }));
     await render({ detail: { ...props.detail! } });
     expect(invalidate).toHaveBeenCalledTimes(2);
-    expect(refreshActivity).toHaveBeenCalledOnce();
-    expect(diffRefreshes()).toBe("1");
+    expect(refreshMetadata).not.toHaveBeenCalled();
   });
 
   it("does not reread held metadata when poll invalidation fails", async () => {
@@ -224,21 +176,16 @@ describe("mounted pull request refresh sequencing", () => {
     await poll();
     await pending.fail();
     expect(refreshMetadata).not.toHaveBeenCalled();
-    expect(refreshActivity).not.toHaveBeenCalled();
-    expect(diffRefreshes()).toBe("0");
   });
 
-  it("reports failed manual invalidation without refreshing and allows a successful retry", async () => {
+  it("reports failed manual invalidation and allows a successful retry", async () => {
     await render();
     const failed = invalidation();
     await act(async () => {
       void renderer!.root.findByType("button").props.onClick();
     });
     expect(renderer!.root.findByType("button").props.disabled).toBe(true);
-    expect(refreshDetail).not.toHaveBeenCalled();
     await failed.fail();
-    expect(refreshDetail).not.toHaveBeenCalled();
-    expect(diffRefreshes()).toBe("0");
     expect(notify).toHaveBeenCalledExactlyOnceWith({
       type: "error",
       title: "The pull request could not be refreshed",
@@ -251,12 +198,9 @@ describe("mounted pull request refresh sequencing", () => {
       void renderer!.root.findByType("button").props.onClick();
     });
     expect(renderer!.root.findByType("button").props.disabled).toBe(true);
-    expect(refreshDetail).not.toHaveBeenCalled();
-    expect(diffRefreshes()).toBe("0");
     await retry.succeed();
     expect(invalidate).toHaveBeenCalledTimes(2);
-    expect(refreshDetail).toHaveBeenCalledOnce();
-    expect(diffRefreshes()).toBe("1");
+    expect(refreshMetadata).not.toHaveBeenCalled();
     expect(notify).toHaveBeenCalledOnce();
     expect(renderer!.root.findByType("button").props.disabled).toBe(false);
   });
@@ -273,13 +217,10 @@ describe("mounted pull request refresh sequencing", () => {
       await render({ forcedRefreshToken: 1 });
       await (outcome === "success" ? older.succeed() : older.fail());
       expect(renderer!.root.findByType("button").props.disabled).toBe(true);
-      expect(refreshDetail).not.toHaveBeenCalled();
       expect(notify).not.toHaveBeenCalled();
-      expect(diffRefreshes()).toBe("0");
       await newer.succeed();
+      expect(refreshMetadata).not.toHaveBeenCalled();
       expect(renderer!.root.findByType("button").props.disabled).toBe(false);
-      expect(refreshDetail).toHaveBeenCalledOnce();
-      expect(diffRefreshes()).toBe("1");
     },
   );
 
@@ -300,21 +241,17 @@ describe("mounted pull request refresh sequencing", () => {
       renderer = null;
     }
     await pending.succeed();
-    expect(refreshDetail).not.toHaveBeenCalled();
+    expect(refreshMetadata).not.toHaveBeenCalled();
     expect(notify).not.toHaveBeenCalled();
-    if (renderer) expect(diffRefreshes()).toBe("0");
   });
 
-  it("awaits full invalidation before a page refresh", async () => {
+  it("awaits full invalidation for a page refresh", async () => {
     await render();
     const pending = invalidation();
     await render({ forcedRefreshToken: 1 });
-    expect(refreshDetail).not.toHaveBeenCalled();
-    expect(diffRefreshes()).toBe("0");
     expect(renderer!.root.findByType("button").props.disabled).toBe(true);
     await pending.succeed();
-    expect(refreshDetail).toHaveBeenCalledOnce();
-    expect(diffRefreshes()).toBe("1");
     expect(renderer!.root.findByType("button").props.disabled).toBe(false);
+    expect(refreshMetadata).not.toHaveBeenCalled();
   });
 });

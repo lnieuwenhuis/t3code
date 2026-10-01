@@ -3707,6 +3707,27 @@ it.effect("explicit invalidation refreshes origin readers after a routed host mu
   ),
 );
 
+it.effect("detail-only invalidation does not broadcast a second client refresh", () =>
+  Effect.gen(function* () {
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [fakeProvider("github")],
+    });
+    yield* service.refreshAfterTurn(reference.projectId);
+    const revision = Option.getOrThrow(yield* Stream.runHead(service.subscribeRefreshes));
+
+    yield* service.invalidate({ reference, scope: "detail" }, { notifyReaders: true });
+    assert.strictEqual(
+      Option.getOrThrow(yield* Stream.runHead(service.subscribeRefreshes)),
+      revision,
+    );
+
+    yield* service.invalidate({ reference }, { notifyReaders: true });
+    assert.isAbove(Option.getOrThrow(yield* Stream.runHead(service.subscribeRefreshes)), revision);
+  }),
+);
+
 it.effect("does not cache a failed listing", () =>
   Effect.gen(function* () {
     let hostCalls = 0;

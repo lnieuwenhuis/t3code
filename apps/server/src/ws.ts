@@ -3147,7 +3147,9 @@ const makeWsRpcLayer = (
               // A reader asking for fresh host state also wants the thread badges it feeds to
               // catch up, including a merged link the sweep would otherwise never revisit.
               Effect.andThen(
-                input.reference === undefined || input.filesViewedOnly === true
+                input.reference === undefined ||
+                  input.filesViewedOnly === true ||
+                  input.scope === "detail"
                   ? Effect.void
                   : resolvePullRequestSyncKey(input.reference).pipe(
                       Effect.flatMap((key) =>

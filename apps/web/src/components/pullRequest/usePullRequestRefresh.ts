@@ -14,9 +14,6 @@ export function usePullRequestRefresh({
   scopeKey,
   detail,
   refreshMetadata,
-  refreshActivity,
-  activityPending = false,
-  refreshDetail,
   forcedRefreshToken,
 }: {
   environmentId: EnvironmentId;
@@ -24,25 +21,15 @@ export function usePullRequestRefresh({
   scopeKey: string;
   detail: Pick<PullRequestDetail, "updatedAt"> | null;
   refreshMetadata: () => void;
-  refreshActivity: () => void;
-  activityPending?: boolean;
-  refreshDetail: () => void;
   forcedRefreshToken: number;
 }) {
-  const [refreshToken, setRefreshToken] = useState(0);
   const invalidate = useAtomCommand(pullRequestEnvironment.invalidate, { reportFailure: false });
   const activityRevision = useRef<{ readonly key: string; readonly updatedAt: string } | null>(
     null,
   );
-  const queuedActivityRevision = useRef<typeof activityRevision.current>(null);
-  const activityPendingRef = useRef(activityPending);
-  useEffect(() => {
-    activityPendingRef.current = activityPending;
-  }, [activityPending]);
   useEffect(
     () => () => {
       activityRevision.current = null;
-      queuedActivityRevision.current = null;
     },
     [],
   );
@@ -59,11 +46,10 @@ export function usePullRequestRefresh({
       return;
     const previous = activityRevision.current;
     const changed = shouldRefreshPullRequestActivity(previous, next);
-    if (changed && activityPending) return;
     activityRevision.current = next;
     if (!changed) return;
-    // A changed revision must miss the held diff before the Code tab reads its first page.
-    // Later revisions or another PR supersede this refresh while invalidation is in flight.
+    // Full invalidation broadcasts one refresh to mounted metadata, activity and Code readers.
+    // A second local refresh would interrupt those reads before they settle.
     void invalidate({ environmentId, input: { reference } }).then((result) => {
       if (activityRevision.current !== next) return;
       if (result._tag === "Failure") {
@@ -75,22 +61,8 @@ export function usePullRequestRefresh({
         });
         return;
       }
-      if (activityPendingRef.current) {
-        queuedActivityRevision.current = next;
-      } else {
-        refreshActivity();
-        setRefreshToken((token) => token + 1);
-      }
     });
-  }, [activityPending, refreshActivity, detail, environmentId, invalidate, reference, scopeKey]);
-  useEffect(() => {
-    if (activityPending || !queuedActivityRevision.current) return;
-    const queued = queuedActivityRevision.current;
-    queuedActivityRevision.current = null;
-    if (activityRevision.current !== queued) return;
-    refreshActivity();
-    setRefreshToken((token) => token + 1);
-  }, [activityPending, detail, refreshActivity, scopeKey]);
+  }, [detail, environmentId, invalidate, reference, scopeKey]);
   // Poll fresh metadata without invalidating cached diff pages. A changed detail revision
   // refreshes activity and the Code tab above; unchanged polls preserve loaded slices.
   const refreshDetailFromHost = useCallback(async () => {
@@ -128,19 +100,17 @@ export function usePullRequestRefresh({
         });
         return;
       }
-      refreshDetail();
-      setRefreshToken((token) => token + 1);
     } finally {
       if (activeRefreshScope.current === refreshScope && generation === refreshGeneration.current)
         setPendingScope(null);
     }
-  }, [environmentId, invalidate, reference, refreshDetail, refreshScope]);
-  // A refresh asked for by the page: the detail, and through the token below, the diff with it.
+  }, [environmentId, invalidate, reference, refreshScope]);
+  // The page can request the same full invalidation; its broadcast refreshes mounted readers.
   const appliedForcedToken = useRef(forcedRefreshToken);
   useEffect(() => {
     if (appliedForcedToken.current === forcedRefreshToken) return;
     appliedForcedToken.current = forcedRefreshToken;
     void refreshFromHost();
   }, [forcedRefreshToken, refreshFromHost]);
-  return { refreshToken, isInvalidating, refreshFromHost };
+  return { isInvalidating, refreshFromHost };
 }

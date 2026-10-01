@@ -3148,7 +3148,9 @@ export const make = Effect.gen(function* () {
       viewersByHost.clear();
       yield* Cache.invalidateAll(viewerFlights);
     }
-    if (options?.notifyReaders) {
+    // A detail poll drives its own mounted read after this command completes. Broadcasting here
+    // starts that read early, then the caller's refresh interrupts it mid-flight.
+    if (options?.notifyReaders && input.scope !== "detail") {
       yield* SubscriptionRef.set(pullRequestRefreshes, ++epochCounter);
     }
   });

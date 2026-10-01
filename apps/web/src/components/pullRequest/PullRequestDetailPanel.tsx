@@ -816,18 +816,15 @@ export function PullRequestDetailPanel({
     activityQuery.refresh();
     nativeStackQuery.refresh();
   }, [activityQuery.refresh, detailQuery.refresh, nativeStackQuery.refresh]);
-  const { refreshToken, isInvalidating, refreshFromHost } = usePullRequestRefresh({
+  const { isInvalidating, refreshFromHost } = usePullRequestRefresh({
     environmentId,
     reference,
     scopeKey: tabScopeKey,
     detail: coreDetail,
     refreshMetadata: detailQuery.refresh,
-    refreshActivity: activityQuery.refresh,
-    activityPending: activityQuery.isPending,
-    refreshDetail,
     forcedRefreshToken,
   });
-  const codeRefreshToken = refreshToken + (turnRefresh ?? 0);
+  const codeRefreshToken = turnRefresh ?? 0;
   const refreshing = isInvalidating || detailQuery.isPending;
   const runAction = useAtomCommand(pullRequestEnvironment.runAction, { reportFailure: false });
   const postComment = useAtomCommand(pullRequestEnvironment.comment, { reportFailure: false });
