@@ -111,6 +111,14 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 describe("pending answer draft ownership through mounted navigation", () => {
+  it("returns an option-displaced answer when no draft was carried into the question", async () => {
+    await navigate(threadB, false);
+    await navigate(threadB, true);
+    await act(() => composer.edit("typed after question arrival"));
+    await act(() => composer.selectOption("question"));
+    expect(prompt(composer.target)).toBe("typed after question arrival");
+  });
+
   it("does not resurrect an erased carried answer after A to B to A and Stop", async () => {
     const initialTarget = composer.target;
     await navigate(threadB, false);
