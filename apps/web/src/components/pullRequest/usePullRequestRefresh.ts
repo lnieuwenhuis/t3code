@@ -34,9 +34,15 @@ export function usePullRequestRefresh({
   const activityRevision = useRef<{ readonly key: string; readonly updatedAt: string } | null>(
     null,
   );
+  const queuedActivityRevision = useRef<typeof activityRevision.current>(null);
+  const activityPendingRef = useRef(activityPending);
+  useEffect(() => {
+    activityPendingRef.current = activityPending;
+  }, [activityPending]);
   useEffect(
     () => () => {
       activityRevision.current = null;
+      queuedActivityRevision.current = null;
     },
     [],
   );
@@ -69,10 +75,22 @@ export function usePullRequestRefresh({
         });
         return;
       }
-      refreshActivity();
-      setRefreshToken((token) => token + 1);
+      if (activityPendingRef.current) {
+        queuedActivityRevision.current = next;
+      } else {
+        refreshActivity();
+        setRefreshToken((token) => token + 1);
+      }
     });
   }, [activityPending, refreshActivity, detail, environmentId, invalidate, reference, scopeKey]);
+  useEffect(() => {
+    if (activityPending || !queuedActivityRevision.current) return;
+    const queued = queuedActivityRevision.current;
+    queuedActivityRevision.current = null;
+    if (activityRevision.current !== queued) return;
+    refreshActivity();
+    setRefreshToken((token) => token + 1);
+  }, [activityPending, detail, refreshActivity, scopeKey]);
   // Poll fresh metadata without invalidating cached diff pages. A changed detail revision
   // refreshes activity and the Code tab above; unchanged polls preserve loaded slices.
   const refreshDetailFromHost = useCallback(async () => {

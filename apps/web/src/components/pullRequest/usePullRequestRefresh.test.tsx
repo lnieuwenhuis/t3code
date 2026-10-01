@@ -138,6 +138,35 @@ describe("mounted pull request refresh sequencing", () => {
     expect(diffRefreshes()).toBe("1");
   });
 
+  it("waits for an activity load that starts during invalidation", async () => {
+    await render();
+    const pending = invalidation();
+    await render({ detail: { updatedAt: "2026-09-10T10:01:00Z" } });
+    await render({ activityPending: true });
+    await pending.succeed();
+    expect(refreshActivity).not.toHaveBeenCalled();
+    expect(diffRefreshes()).toBe("0");
+
+    await render({ activityPending: false });
+    expect(refreshActivity).toHaveBeenCalledOnce();
+    expect(diffRefreshes()).toBe("1");
+  });
+
+  it("discards a queued activity refresh after the pull request changes", async () => {
+    await render();
+    const pending = invalidation();
+    await render({ detail: { updatedAt: "2026-09-10T10:01:00Z" } });
+    await render({ activityPending: true });
+    await pending.succeed();
+    await render({
+      scopeKey: `${props.scopeKey}:other`,
+      reference: { ...props.reference, number: 8 },
+      activityPending: false,
+    });
+    expect(refreshActivity).not.toHaveBeenCalled();
+    expect(diffRefreshes()).toBe("0");
+  });
+
   it("ignores a completed invalidation superseded by a newer revision", async () => {
     await render();
     const earlier = invalidation();
