@@ -15,6 +15,7 @@ export function usePullRequestRefresh({
   detail,
   refreshMetadata,
   refreshActivity,
+  activityPending = false,
   refreshDetail,
   forcedRefreshToken,
 }: {
@@ -24,6 +25,7 @@ export function usePullRequestRefresh({
   detail: Pick<PullRequestDetail, "updatedAt"> | null;
   refreshMetadata: () => void;
   refreshActivity: () => void;
+  activityPending?: boolean;
   refreshDetail: () => void;
   forcedRefreshToken: number;
 }) {
@@ -51,6 +53,7 @@ export function usePullRequestRefresh({
       return;
     const previous = activityRevision.current;
     const changed = shouldRefreshPullRequestActivity(previous, next);
+    if (changed && activityPending) return;
     activityRevision.current = next;
     if (!changed) return;
     // A changed revision must miss the held diff before the Code tab reads its first page.
@@ -69,7 +72,7 @@ export function usePullRequestRefresh({
       refreshActivity();
       setRefreshToken((token) => token + 1);
     });
-  }, [refreshActivity, detail, environmentId, invalidate, reference, scopeKey]);
+  }, [activityPending, refreshActivity, detail, environmentId, invalidate, reference, scopeKey]);
   // Poll fresh metadata without invalidating cached diff pages. A changed detail revision
   // refreshes activity and the Code tab above; unchanged polls preserve loaded slices.
   const refreshDetailFromHost = useCallback(async () => {
