@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  filterNewTaskBranches,
   resolveNewTaskBranchWorktreePath,
   resolveNewTaskBranchAfterModeChange,
   resolveNewTaskBranchLabel,
@@ -143,5 +144,28 @@ describe("resolveNewTaskBranchAfterModeChange", () => {
     expect(resolveNewTaskBranchAfterModeChange("worktree", "local", "main")).toBe("main");
     expect(resolveNewTaskBranchAfterModeChange("local", "local", "feature")).toBe("feature");
     expect(resolveNewTaskBranchAfterModeChange("local", "worktree", null)).toBeNull();
+  });
+});
+
+describe("filterNewTaskBranches", () => {
+  const branches = [
+    { name: "main", isRemote: false },
+    { name: "Feature/Login-Page", isRemote: false },
+    { name: "origin/fix/remote-only", isRemote: true },
+  ];
+  const search = (query: string) =>
+    filterNewTaskBranches(branches, query).map((branch) => branch.name);
+
+  it("ignores case in both the query and the branch name", () => {
+    expect(search("feature/login")).toEqual(["Feature/Login-Page"]);
+    expect(search("MAIN")).toEqual(["main"]);
+  });
+
+  it("keeps remote-only branches searchable", () => {
+    expect(search("remote-only")).toEqual(["origin/fix/remote-only"]);
+  });
+
+  it("matches a typed space against the dash a branch name uses", () => {
+    expect(search("  login page ")).toEqual(["Feature/Login-Page"]);
   });
 });
