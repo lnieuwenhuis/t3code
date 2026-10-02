@@ -126,7 +126,10 @@ import {
 } from "@t3tools/shared/projectScripts";
 import { CHAT_LIST_ANCHOR_OFFSET } from "@t3tools/shared/chatList";
 import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
-import { usageLimitRunPresentedAsLatest } from "@t3tools/shared/orchestrationV2ThreadError";
+import {
+  latestUnheldRun,
+  usageLimitRunPresentedAsLatest,
+} from "@t3tools/shared/orchestrationV2ThreadError";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
 import { truncate } from "@t3tools/shared/String";
@@ -3469,12 +3472,6 @@ export default function ChatView(props: ChatViewProps) {
     if (serverProjection === null || serverProjection === undefined) {
       return [];
     }
-    const newestRun =
-      serverProjection.runs.length === 0
-        ? null
-        : serverProjection.runs.reduce((latest, candidate) =>
-            candidate.ordinal > latest.ordinal ? candidate : latest,
-          );
     const sessionError =
       serverProjection.providerSessions.findLast(
         (session) => session.providerInstanceId === serverProjection.thread.providerInstanceId,
@@ -3484,7 +3481,7 @@ export default function ChatView(props: ChatViewProps) {
         serverProjection.runs,
         serverProjection.turnItems,
         sessionError,
-      ) ?? newestRun;
+      ) ?? latestUnheldRun(serverProjection.runs);
     return [
       ...derivePendingBackgroundWork({
         latestRun,
@@ -10497,7 +10494,12 @@ export default function ChatView(props: ChatViewProps) {
             "flex shrink-0",
             panelAnimationsActive &&
               "motion-safe:transition-opacity motion-safe:duration-(--panel-animation-duration) motion-safe:ease-out",
-            rightPanelOpen ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0",
+            // Closed, the control leaves the flex flow so the cluster is only as wide as the two
+            // toggles the header reserves room for; anchored to the cluster's left edge, it fades
+            // out where it stood rather than over the terminal toggle.
+            rightPanelOpen
+              ? "pointer-events-auto opacity-100"
+              : "pointer-events-none absolute right-full mr-1 opacity-0",
           )}
           inert={!rightPanelOpen}
         >
