@@ -226,6 +226,7 @@ import {
   type Thread,
 } from "../types";
 import { useTheme } from "../hooks/useTheme";
+import { usePullRequestLinking } from "../hooks/usePullRequestLinking";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { subscribeSnapShotComposerFocus } from "../lib/desktopSnapShot";
@@ -357,9 +358,11 @@ import {
   finalizePromotedDraftThreadByRef,
   markPromotedDraftThreadByRef,
   restoreFailedBackgroundDraftThread,
+  checkoutPullRequestUrlToLink,
   composerDraftHasUserContent,
   type ComposerFileAttachment,
   type ComposerImageAttachment,
+  type DraftCheckoutPullRequest,
   type DraftThreadEnvMode,
   useComposerDraftStore,
   DraftId,
@@ -414,6 +417,7 @@ import {
   useThreadShell,
   useThreadRefs,
   useThreadVisibleTurnItems,
+  readThreadShell,
   waitForThreadShell,
 } from "../state/entities";
 import { environmentShell } from "../state/shell";
@@ -1565,6 +1569,17 @@ export default function ChatView(props: ChatViewProps) {
     reportFailure: false,
   });
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
+  const pullRequestLinking = usePullRequestLinking(environmentId);
+  // Links the pull request a checkout prepared to the thread it landed on, the same way the Link
+  // pull request dialog does. Best effort: the thread already exists, so a failure is only logged.
+  const linkCheckoutPullRequest = useCallback(
+    (threadRef: ScopedThreadRef, url: string) => {
+      pullRequestLinking.changeLink(threadRef, url, true).catch((error: unknown) => {
+        console.warn("Failed to link the checked-out pull request to its thread.", error);
+      });
+    },
+    [pullRequestLinking],
+  );
   const resumeThreadQueue = useAtomCommand(threadEnvironment.resumeThreadQueue, {
     reportFailure: false,
   });
@@ -2757,7 +2772,12 @@ export default function ChatView(props: ChatViewProps) {
   }, []);
 
   const openOrReuseProjectDraftThread = useCallback(
-    async (input: { branch: string; worktreePath: string | null; envMode: DraftThreadEnvMode }) => {
+    async (input: {
+      branch: string;
+      worktreePath: string | null;
+      envMode: DraftThreadEnvMode;
+      checkoutPullRequest: DraftCheckoutPullRequest;
+    }) => {
       if (!activeProject) {
         throw new Error("No active project is available for this pull request.");
       }
@@ -2836,14 +2856,21 @@ export default function ChatView(props: ChatViewProps) {
   );
 
   const handlePreparedPullRequestThread = useCallback(
-    async (input: { branch: string; worktreePath: string | null }) => {
-      await openOrReuseProjectDraftThread({
+    async (input: { branch: string; worktreePath: string | null; pullRequestUrl: string }) => {
+      const threadId = await openOrReuseProjectDraftThread({
         branch: input.branch,
         worktreePath: input.worktreePath,
         envMode: input.worktreePath ? "worktree" : "local",
+        checkoutPullRequest: { url: input.pullRequestUrl, branch: input.branch },
       });
+      // The draft holds the pull request until its first send creates the thread. A draft that
+      // was already sent while the checkout ran is a thread now, so it is linked here instead.
+      const threadRef = scopeThreadRef(environmentId, threadId);
+      if (readThreadShell(threadRef) !== null) {
+        linkCheckoutPullRequest(threadRef, input.pullRequestUrl);
+      }
     },
-    [openOrReuseProjectDraftThread],
+    [environmentId, linkCheckoutPullRequest, openOrReuseProjectDraftThread],
   );
 
   useEffect(() => {
@@ -9476,6 +9503,10 @@ export default function ChatView(props: ChatViewProps) {
         submissionIntent === "background" && isLocalDraftThread
           ? scopeThreadRef(environmentId, threadIdForSend)
           : null;
+      // Read before sending: once the thread exists the draft holding it is finalized away.
+      const checkoutPullRequestUrl = isLocalDraftThread
+        ? checkoutPullRequestUrlToLink(draftThread)
+        : null;
       if (backgroundThreadRef) beginBackgroundDraftSubmissionByRef(backgroundThreadRef);
       const startPromise = startThreadTurn({
         environmentId,
@@ -9551,6 +9582,12 @@ export default function ChatView(props: ChatViewProps) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
+        if (checkoutPullRequestUrl) {
+          linkCheckoutPullRequest(
+            scopeThreadRef(environmentId, threadIdForSend),
+            checkoutPullRequestUrl,
+          );
+        }
         // The turn is under way and will spend quota, so that thread's limits
         // snapshot is stale. Uploads may have outlasted a navigation, so only
         // the sending thread's panel clears.
