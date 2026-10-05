@@ -119,6 +119,8 @@ describe("extractTerminalLinks", () => {
   it.each([
     " GET /api/trpc/post.list,user.me?batch=1&input=%7B%220%22%3A%7B%22json%22%3Anull%7D%7D 200 in 35ms",
     "GET /api/users?id=42 200",
+    "GET /api/users?=42 200",
+    "GET /api/search?&q=term 200",
     "proxying api/trpc/post.list?batch=1 to the backend",
   ])("skips request routes carrying a query string in %s", (line) => {
     expect(extractTerminalLinks(line)).toEqual([]);

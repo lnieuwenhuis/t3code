@@ -41,7 +41,7 @@ const TRAILING_PATH_PUNCTUATION_PATTERN = /[.,;:!?]+$/;
 // Request logs print routes like `/api/trpc/post.list?batch=1`; files don't carry
 // queries, while prose like `src/main.ts?` still trims to a path.
 const TOKEN_PATTERN = /[^\s"'`<>]*/y;
-const QUERY_STRING_PATTERN = /\?[A-Za-z0-9_%-]/;
+const QUERY_STRING_PATTERN = /\?[A-Za-z0-9_%&=-]/;
 
 function trimClosingDelimiters(value: string, kind: TerminalLinkKind): string {
   let output = value.replace(
