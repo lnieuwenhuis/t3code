@@ -497,6 +497,7 @@ import {
   branchMismatchKey,
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
+  checkoutLandedOnSentDraft,
   collectUserMessageBlobPreviewUrls,
   createLocalDispatchSnapshot,
   deriveCommittedServerUserMessageIds,
@@ -1942,6 +1943,8 @@ export default function ChatView(props: ChatViewProps) {
   const fanoutStateAtom = draftFanoutStateAtom(routeThreadKey);
   const fanoutState = useAtomValue(fanoutStateAtom);
   const sendInFlightRef = fanoutState.sendInFlight;
+  // Draft threads whose send already read the draft (see `checkoutLandedOnSentDraft`).
+  const sentDraftThreadIdsRef = useRef(new Set<ThreadId>());
   const [resumingThreadKeys, setResumingThreadKeys] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
@@ -2863,10 +2866,22 @@ export default function ChatView(props: ChatViewProps) {
         envMode: input.worktreePath ? "worktree" : "local",
         checkoutPullRequest: { url: input.pullRequestUrl, branch: input.branch },
       });
-      // The draft holds the pull request until its first send creates the thread. A draft that
-      // was already sent while the checkout ran is a thread now, so it is linked here instead.
+      // The draft holds the pull request until its first send creates the thread. A draft sent
+      // while the checkout ran missed it, so its thread is linked here once it exists.
       const threadRef = scopeThreadRef(environmentId, threadId);
-      if (readThreadShell(threadRef) !== null) {
+      if (
+        !checkoutLandedOnSentDraft({
+          threadId,
+          sentDraftThreadIds: sentDraftThreadIdsRef.current,
+          draft: useComposerDraftStore.getState().getDraftSessionByRef(threadRef),
+          threadShellExists: readThreadShell(threadRef) !== null,
+        })
+      ) {
+        return;
+      }
+      // A send that fails never creates the thread; the draft keeps the pull request and its
+      // next send links it.
+      if (await waitForThreadShell(threadRef)) {
         linkCheckoutPullRequest(threadRef, input.pullRequestUrl);
       }
     },
@@ -9507,6 +9522,9 @@ export default function ChatView(props: ChatViewProps) {
       const checkoutPullRequestUrl = isLocalDraftThread
         ? checkoutPullRequestUrlToLink(draftThread)
         : null;
+      // Recorded together with the read above, so a checkout finishing on either side of it is
+      // linked exactly once: by this send, or by the checkout after it.
+      if (isLocalDraftThread) sentDraftThreadIdsRef.current.add(threadIdForSend);
       if (backgroundThreadRef) beginBackgroundDraftSubmissionByRef(backgroundThreadRef);
       const startPromise = startThreadTurn({
         environmentId,
@@ -9580,6 +9598,8 @@ export default function ChatView(props: ChatViewProps) {
       const startResult = await startPromise;
       if (startResult._tag === "Failure") {
         failure = startResult;
+        // The draft is still a draft; its next send reads it again.
+        sentDraftThreadIdsRef.current.delete(threadIdForSend);
       } else {
         turnStartSucceeded = true;
         if (checkoutPullRequestUrl) {
