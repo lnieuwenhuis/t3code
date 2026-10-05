@@ -51,6 +51,48 @@ describe("desktopNetworkAccessState", () => {
     registry.dispose();
   });
 
+  it("revalidates when the settings screen remounts after the snapshot is stale", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const getServerExposureState = vi.fn(async () => serverExposureState);
+      const getAdvertisedEndpoints = vi.fn(async () => advertisedEndpoints);
+      const atom = createDesktopNetworkAccessStateAtom(() => ({
+        getAdvertisedEndpoints,
+        getServerExposureState,
+      }));
+      const registry = AtomRegistry.make();
+
+      const unmount = registry.mount(atom);
+      await vi.waitFor(() => {
+        expect(AsyncResult.value(registry.get(atom))).toEqual(
+          expect.objectContaining({ _tag: "Some" }),
+        );
+      });
+      unmount();
+      // Leaving the screen releases the SWR wrapper; the loaded snapshot stays alive.
+      await vi.waitFor(() => expect(registry.getNodes().has(atom)).toBe(false));
+
+      vi.advanceTimersByTime(30_001);
+
+      const remount = registry.mount(atom);
+      expect(AsyncResult.value(registry.get(atom))).toEqual(
+        expect.objectContaining({
+          _tag: "Some",
+          value: { advertisedEndpoints, serverExposureState },
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(getServerExposureState).toHaveBeenCalledTimes(2);
+        expect(getAdvertisedEndpoints).toHaveBeenCalledTimes(2);
+      });
+
+      remount();
+      registry.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     {
       cause: serverExposureLoadCause,
