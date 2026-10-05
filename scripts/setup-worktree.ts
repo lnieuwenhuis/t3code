@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off - runs before `vp i`, so only Node built-ins exist.
+// @effect-diagnostics nodeBuiltinImport:off globalConsole:off - runs before `vp i`, so only Node built-ins exist.
 /**
  * Worktree setup, run by the t3.json "Setup Worktree" action as
  * `node scripts/setup-worktree.ts`. Plain Node keeps one command working in
