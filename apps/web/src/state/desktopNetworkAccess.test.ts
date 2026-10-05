@@ -114,6 +114,72 @@ describe("desktopNetworkAccessState", () => {
     }
   });
 
+  it("does not refetch when the settings screen reopens within the stale period", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const getServerExposureState = vi.fn(async () => serverExposureState);
+      const getAdvertisedEndpoints = vi.fn(async () => advertisedEndpoints);
+      const atom = createDesktopNetworkAccessStateAtom(() => ({
+        getAdvertisedEndpoints,
+        getServerExposureState,
+      }));
+      const registry = AtomRegistry.make();
+
+      const unmount = registry.mount(atom);
+      await vi.waitFor(() => {
+        expect(AsyncResult.isSuccess(registry.get(atom))).toBe(true);
+      });
+      unmount();
+      await vi.waitFor(() => expect(registry.getNodes().has(atom)).toBe(false));
+
+      vi.advanceTimersByTime(10_000);
+
+      const remount = registry.mount(atom);
+      const result = registry.get(atom);
+      expect(AsyncResult.isSuccess(result) && !result.waiting).toBe(true);
+      expect(getServerExposureState).toHaveBeenCalledTimes(1);
+      expect(getAdvertisedEndpoints).toHaveBeenCalledTimes(1);
+
+      remount();
+      registry.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refetches on an explicit refresh within the stale period", async () => {
+    const getServerExposureState = vi.fn(async () => serverExposureState);
+    const getAdvertisedEndpoints = vi
+      .fn<() => Promise<ReadonlyArray<AdvertisedEndpoint>>>()
+      .mockResolvedValueOnce(advertisedEndpoints)
+      .mockResolvedValue([tailscaleEndpoint]);
+    const atom = createDesktopNetworkAccessStateAtom(() => ({
+      getAdvertisedEndpoints,
+      getServerExposureState,
+    }));
+    const registry = AtomRegistry.make();
+
+    const unmount = registry.mount(atom);
+    await vi.waitFor(() => {
+      expect(AsyncResult.isSuccess(registry.get(atom))).toBe(true);
+    });
+
+    registry.refresh(atom);
+
+    await vi.waitFor(() => {
+      expect(getAdvertisedEndpoints).toHaveBeenCalledTimes(2);
+      expect(AsyncResult.value(registry.get(atom))).toEqual(
+        expect.objectContaining({
+          _tag: "Some",
+          value: { advertisedEndpoints: [tailscaleEndpoint], serverExposureState },
+        }),
+      );
+    });
+
+    unmount();
+    registry.dispose();
+  });
+
   it.each([
     {
       cause: serverExposureLoadCause,
