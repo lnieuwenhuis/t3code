@@ -4,6 +4,8 @@ import {
   ProjectId,
   ProviderInstanceId,
   ComposerContextId,
+  EnvironmentId,
+  ThreadId,
   type OrchestrationMessageContext,
 } from "@t3tools/contracts";
 import { collectComposerInlineTokens } from "@t3tools/shared/composerInlineTokens";
@@ -23,6 +25,7 @@ import {
   uploadedComposerContext,
   serializeComposerMessageForServer,
   pullRequestComposerContext,
+  threadComposerContext,
 } from "./composerContext";
 
 const terminal = {
@@ -269,5 +272,36 @@ describe("host context compatibility", () => {
     expect(message.text).toContain(pr.pullRequest!.url);
     expect(serializeComposerMessageForServer(text, context, true)).toEqual({ text, context });
     expect(context.records).toEqual([terminal, review, pr]);
+  });
+});
+
+describe("threadComposerContext", () => {
+  const environmentId = EnvironmentId.make("env-1");
+  const agentThreadIds = [
+    "thread:mcp:3f2b9c1e-8d4a-4b6f-9e2a-7c5d1f0a8b3e:review:0",
+    `thread:delegated-task:${encodeURIComponent(
+      "command:mcp:3f2b9c1e-8d4a-4b6f-9e2a-7c5d1f0a8b3e:delegate_task:9a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d:attempt:1",
+    )}`,
+  ];
+
+  it.each(agentThreadIds)("mints a schema-valid, stable id for agent-spawned thread %s", (id) => {
+    const ref = { environmentId, threadId: ThreadId.make(id) };
+    const record = threadComposerContext(ref, "Review");
+
+    expect(record.contextId).toMatch(/^[a-z0-9_-]{1,128}$/i);
+    expect(() => ComposerContextId.make(record.contextId)).not.toThrow();
+    expect(record.threadId).toBe(id);
+    // Attaching the same thread again reuses the chip instead of adding a second one.
+    expect(threadComposerContext(ref, "Renamed").contextId).toBe(record.contextId);
+  });
+
+  it("keeps distinct threads distinct and plain ids readable", () => {
+    const [first, second] = agentThreadIds.map(
+      (id) => threadComposerContext({ environmentId, threadId: ThreadId.make(id) }, "t").contextId,
+    );
+    expect(first).not.toBe(second);
+    expect(
+      threadComposerContext({ environmentId, threadId: ThreadId.make("abc-123") }, "t").contextId,
+    ).toBe("thread_abc-123");
   });
 });
