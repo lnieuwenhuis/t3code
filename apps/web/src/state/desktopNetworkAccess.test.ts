@@ -15,6 +15,17 @@ const serverExposureState: DesktopServerExposureState = {
 };
 
 const advertisedEndpoints: ReadonlyArray<AdvertisedEndpoint> = [];
+const tailscaleEndpoint: AdvertisedEndpoint = {
+  id: "tailscale-ip:37737",
+  label: "Tailscale IP",
+  provider: { id: "tailscale", label: "Tailscale", kind: "private-network", isAddon: true },
+  httpBaseUrl: "http://100.64.0.10:37737",
+  wsBaseUrl: "ws://100.64.0.10:37737",
+  reachability: "private-network",
+  compatibility: { hostedHttpsApp: "unknown", desktopApp: "compatible" },
+  source: "desktop-addon",
+  status: "available",
+};
 const serverExposureLoadCause = new Error("exposure failed");
 const advertisedEndpointsLoadCause = new Error("endpoints failed");
 
@@ -55,7 +66,11 @@ describe("desktopNetworkAccessState", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
       const getServerExposureState = vi.fn(async () => serverExposureState);
-      const getAdvertisedEndpoints = vi.fn(async () => advertisedEndpoints);
+      // A Tailscale address appears after the first load.
+      const getAdvertisedEndpoints = vi
+        .fn<() => Promise<ReadonlyArray<AdvertisedEndpoint>>>()
+        .mockResolvedValueOnce(advertisedEndpoints)
+        .mockResolvedValue([tailscaleEndpoint]);
       const atom = createDesktopNetworkAccessStateAtom(() => ({
         getAdvertisedEndpoints,
         getServerExposureState,
@@ -84,6 +99,12 @@ describe("desktopNetworkAccessState", () => {
       await vi.waitFor(() => {
         expect(getServerExposureState).toHaveBeenCalledTimes(2);
         expect(getAdvertisedEndpoints).toHaveBeenCalledTimes(2);
+        expect(AsyncResult.value(registry.get(atom))).toEqual(
+          expect.objectContaining({
+            _tag: "Some",
+            value: { advertisedEndpoints: [tailscaleEndpoint], serverExposureState },
+          }),
+        );
       });
 
       remount();
