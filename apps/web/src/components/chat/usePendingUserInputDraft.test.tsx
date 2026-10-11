@@ -32,10 +32,12 @@ function Composer({
   threadId,
   environment = environmentId,
   pending,
+  initialAnswer,
 }: {
   threadId: ThreadId;
   environment?: EnvironmentId;
   pending: boolean;
+  initialAnswer?: string;
 }) {
   const target = useMemo(() => scopeThreadRef(environment, threadId), [environment, threadId]);
   const [answers, setAnswers] = useState<
@@ -43,7 +45,15 @@ function Composer({
   >({});
   const lifecycle = usePendingUserInputDraft({
     composerDraftTarget: target,
-    activePendingUserInput: pending ? request : null,
+    activePendingUserInput: pending
+      ? {
+          ...request,
+          questions: request.questions.map((question) => ({
+            ...question,
+            ...(initialAnswer === undefined ? {} : { initialAnswer }),
+          })),
+        }
+      : null,
     pendingUserInputAnswersByRequestId: answers,
     setPendingUserInputAnswersByRequestId: setAnswers,
   });
@@ -111,6 +121,28 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 describe("pending answer draft ownership through mounted navigation", () => {
+  it("seeds provider answers without overwriting carried drafts or cleared edits", async () => {
+    useComposerDraftStore
+      .getState()
+      .setPrompt(scopeThreadRef(environmentId, threadB), "unsent B draft");
+    await act(() =>
+      renderer.update(<Composer threadId={threadB} pending initialAnswer="provider seed" />),
+    );
+    expect(composer.answer).toBe("unsent B draft");
+    await act(() => composer.edit(""));
+    await act(() =>
+      renderer.update(<Composer threadId={threadB} pending initialAnswer="changed seed" />),
+    );
+    expect(composer.answer).toBe("");
+  });
+  it("uses the provider initial answer when the composer has no draft", async () => {
+    await act(() =>
+      renderer.update(<Composer threadId={threadB} pending initialAnswer="provider seed" />),
+    );
+    expect(composer.answer).toBe("provider seed");
+    await navigate(threadB, false);
+    expect(prompt(scopeThreadRef(environmentId, threadB))).toBe("provider seed\n\nprovider seed");
+  });
   it("returns every typed answer to the draft when an async question is dismissed", async () => {
     await act(() => composer.edit("first unsent answer"));
     await act(() => composer.edit("second unsent answer", "question-two"));

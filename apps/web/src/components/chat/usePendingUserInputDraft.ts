@@ -1,3 +1,4 @@
+import { seedUserInputDraftAnswers } from "@t3tools/client-runtime/state/thread-requests";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useCallback, useLayoutEffect, useRef, type Dispatch, type SetStateAction } from "react";
 import { useComposerDraftStore, type DraftId } from "../../composerDraftStore";
@@ -27,7 +28,11 @@ export function usePendingUserInputDraft({
   composerDraftTarget: ScopedThreadRef | DraftId;
   activePendingUserInput: {
     requestId: string;
-    questions: ReadonlyArray<{ id: string; allowCustomAnswer?: boolean | undefined }>;
+    questions: ReadonlyArray<{
+      id: string;
+      allowCustomAnswer?: boolean | undefined;
+      initialAnswer?: string | undefined;
+    }>;
   } | null;
   pendingUserInputAnswersByRequestId: AnswersByRequest;
   setPendingUserInputAnswersByRequestId: Dispatch<SetStateAction<AnswersByRequest>>;
@@ -205,6 +210,15 @@ export function usePendingUserInputDraft({
     rescuePendingUserInputAnswers,
     setPendingUserInputAnswersByRequestId,
   ]);
+  // Carry the user's unsent composer text first; provider initial answers only fill untouched slots.
+  useLayoutEffect(() => {
+    if (!activePendingUserInput) return;
+    setPendingUserInputAnswersByRequestId((existing) => {
+      const drafts = existing[activePendingRequestKey] ?? {};
+      const seeded = seedUserInputDraftAnswers(activePendingUserInput.questions, drafts);
+      return seeded === drafts ? existing : { ...existing, [activePendingRequestKey]: seeded };
+    });
+  }, [activePendingRequestKey, activePendingUserInput, setPendingUserInputAnswersByRequestId]);
   // Persist the full current answer set after edits. A failed submission can
   // contain several answers, so clearing one must retain the others even if
   // this thread is hidden before the request disappears.
