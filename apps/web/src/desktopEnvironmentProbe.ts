@@ -13,7 +13,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 export function probeDesktopEnvironment(
   request: DesktopAppEnvironmentProbeRequest,
   readShell: (environmentId: EnvironmentId) => EnvironmentShellState,
-): Effect.Effect<DesktopAppActivationResponse, never, EnvironmentRegistry> {
+): Effect.Effect<DesktopAppActivationResponse, never, EnvironmentRegistry.EnvironmentRegistry> {
   const unavailable = (message: string): DesktopAppActivationResponse => ({
     version: 1,
     requestId: request.requestId,
@@ -22,7 +22,7 @@ export function probeDesktopEnvironment(
     message,
   });
   return Effect.gen(function* () {
-    const registry = yield* EnvironmentRegistry;
+    const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
     const entry = (yield* SubscriptionRef.get(registry.entries)).get(request.environmentId);
     if (entry === undefined)
       return unavailable("The requested environment is not saved in this desktop app.");
@@ -39,7 +39,7 @@ export function probeDesktopEnvironment(
     return yield* registry.run(
       request.environmentId,
       Effect.gen(function* () {
-        const supervisor = yield* EnvironmentSupervisor;
+        const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
         const session = yield* SubscriptionRef.get(supervisor.session);
         if (Option.isNone(session))
           return unavailable("The requested environment has no authenticated session.");

@@ -7,7 +7,7 @@ import { useClientSettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import { environmentPresentations } from "../../state/presentation";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
-import { getDriverOption } from "../settings/providerDriverMeta";
+import { providerClients } from "../settings/providerDriverMeta";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { useSidebar } from "../ui/sidebar";
 import { readUsagePagePreferences, saveUsagePagePreferences } from "../usage/usagePagePreferences";
@@ -72,7 +72,7 @@ function SidebarLimitSegment({
   readonly limit: SidebarLimitView;
   readonly onClick: () => void;
 }) {
-  const option = getDriverOption(limit.driver);
+  const option = providerClients.get(limit.driver);
   const label = option?.label ?? String(limit.driver);
   return (
     <Tooltip>

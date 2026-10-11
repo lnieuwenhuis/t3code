@@ -79,7 +79,7 @@ function setup(
       subscribeServerConfig: () => Stream.empty,
     };
     const session = yield* SubscriptionRef.make(Option.some(rpcSession));
-    const supervisor = EnvironmentSupervisor.of({
+    const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
       target,
       state,
       session,
@@ -95,7 +95,7 @@ function setup(
     };
     const retry = vi.fn();
     const enable = vi.fn();
-    const registry = EnvironmentRegistry.of({
+    const registry = EnvironmentRegistry.EnvironmentRegistry.of({
       entries: yield* SubscriptionRef.make<ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>>(
         new Map(options.registered === false ? [] : [[environmentId, entry]]),
       ),
@@ -105,6 +105,8 @@ function setup(
       registerPlatform: () => Effect.void,
       reconcilePlatform: () => Effect.void,
       remove: () => Effect.void,
+      removeRoute: () => Effect.void,
+      reorderRoutes: () => Effect.void,
       removeRelayEnvironments: () => Effect.void,
       setCompatibility: () => Effect.void,
       setEnabled: (id, enabled) =>
@@ -119,16 +121,21 @@ function setup(
       stateChanges: () => SubscriptionRef.changes(state),
       run: (id, effect) => {
         expect(id).toBe(environmentId);
-        return Effect.provideService(effect, EnvironmentSupervisor, supervisor);
+        return Effect.provideService(
+          effect,
+          EnvironmentSupervisor.EnvironmentSupervisor,
+          supervisor,
+        );
       },
-      runStream: (_id, stream) => Stream.provideService(stream, EnvironmentSupervisor, supervisor),
+      runStream: (_id, stream) =>
+        Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
       followStream: (_id, stream) =>
-        Stream.provideService(stream, EnvironmentSupervisor, supervisor),
+        Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
     });
     const shell = vi.fn(() => liveShell);
     const run = (retry = false) =>
       probeDesktopEnvironment({ ...request, retry }, shell).pipe(
-        Effect.provideService(EnvironmentRegistry, registry),
+        Effect.provideService(EnvironmentRegistry.EnvironmentRegistry, registry),
       );
     return { run, probe, retry, enable, shell, session, rpcSession, state };
   });
