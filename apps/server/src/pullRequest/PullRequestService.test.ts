@@ -1,5 +1,7 @@
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeV8 from "node:v8";
+import * as NodeVM from "node:vm";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as KeyValueStore from "effect/persistence/KeyValueStore";
 import { assert, it } from "@effect/vitest";
@@ -5037,6 +5039,7 @@ it.effect("answers a known pull request immediately while the host refreshes", (
 it.effect("an invalidated detail read sees an external change a plain re-read holds back", () =>
   Effect.gen(function* () {
     const gate = yield* Deferred.make<void>();
+    const refreshStarted = yield* Deferred.make<void>();
     let calls = 0;
     let hostTitle = "old title";
     let hostChecks: ReadonlyArray<{ readonly name: string; readonly status: "success" }> = [];
@@ -5050,7 +5053,10 @@ it.effect("an invalidated detail read sees an external change a plain re-read ho
               calls += 1;
               // The plain re-read's background refresh stalls here, so the hold stays old
               // while the invalidated poll read runs past it.
-              if (calls === 2) yield* Deferred.await(gate);
+              if (calls === 2) {
+                yield* Deferred.succeed(refreshStarted, undefined);
+                yield* Deferred.await(gate);
+              }
               return {
                 ...hostedChangeRequest("polled body", 4),
                 title: hostTitle,
@@ -5074,11 +5080,18 @@ it.effect("an invalidated detail read sees an external change a plain re-read ho
     hostChecks = [{ name: "ci", status: "success" }];
     yield* TestClock.adjust("16 seconds");
 
+    // Detail has a 60-second TTL; the 15-second checks TTL does not expire it.
+    const fresh = yield* service.detail({ ...reference, allowStale: false });
+    assert.strictEqual(fresh.title, "old title");
+    assert.deepStrictEqual(fresh.checks, []);
+    assert.strictEqual(calls, 1);
+    yield* TestClock.adjust("45 seconds");
+
     // The old poll path: a plain re-read answers from the hold while refreshing behind it.
     const second = yield* service.detail(reference);
     assert.strictEqual(second.title, "old title");
     assert.deepStrictEqual(second.checks, []);
-    yield* Effect.yieldNow;
+    yield* Deferred.await(refreshStarted);
     assert.strictEqual(calls, 2);
 
     // The poll path the panel now takes: invalidate first so the re-read misses the hold,
@@ -6519,6 +6532,41 @@ it.effect("caches a small replacement after releasing a large diff", () =>
     assert.strictEqual((yield* service.diff(reference)).patch, "@@ small replacement");
     assert.strictEqual((yield* service.diff(reference)).patch, "@@ small replacement");
     assert.strictEqual(reads, 2);
+  }),
+);
+
+it.effect("releases an expired diff nobody reads again", () =>
+  Effect.gen(function* () {
+    NodeV8.setFlagsFromString("--expose-gc");
+    const collect = NodeVM.runInNewContext("gc") as () => void;
+    const settle = Effect.promise(async () => {
+      // A weak reference keeps its target for the rest of the job that created it.
+      await new Promise((resolve) => setImmediate(resolve));
+      collect();
+    });
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider(SourceControlProviderKind.make("github"), {
+          getDiff: () => Effect.sync(() => ({ patch: "@@", truncated: false, nextCursor: null })),
+        }),
+      ],
+    });
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+    const read = (input: Parameters<typeof service.diff>[0]) =>
+      Effect.map(service.diff(input), (result) => new WeakRef(result));
+    const page = yield* read(reference);
+    const commit = yield* read({ ...reference, commit: "a".repeat(40) });
+
+    yield* TestClock.adjust("9 minutes");
+    yield* settle;
+    assert.isDefined(page.deref());
+    assert.isDefined(commit.deref());
+
+    yield* TestClock.adjust("2 minutes");
+    yield* settle;
+    assert.isUndefined(page.deref());
+    assert.isUndefined(commit.deref());
   }),
 );
 
