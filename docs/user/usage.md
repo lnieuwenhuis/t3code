@@ -124,6 +124,10 @@ Grok reports the remaining subscription allowance and reset time for its current
 after signing in with `grok login`. Explicit `XAI_API_KEY` connections and custom authentication
 or endpoint configurations do not report subscription limits.
 
+Muse Code reports its 5-hour window and weekly allowance during a turn, so its limits appear
+after you send Muse a message and stay until the T3 server restarts. Muse cannot report them
+before then.
+
 API-key accounts may not report subscription limits. This also applies to Claude connections
 using a proxy through `ANTHROPIC_AUTH_TOKEN`.
 
