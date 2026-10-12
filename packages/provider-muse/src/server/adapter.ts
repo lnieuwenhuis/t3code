@@ -39,6 +39,7 @@ import * as Stream from "effect/Stream";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import type { ManagedServerProvider } from "@t3tools/provider-core/server/snapshot";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import { museModelCapabilities, resolveMuseReasoningEffort } from "./modelCatalog.ts";
 import {
@@ -66,6 +67,7 @@ import {
   type createMuseSdkHost,
   type MuseSdkHost,
 } from "./sdk.ts";
+import { MuseSubscriptionUsage, museUsageToUpdate } from "./usageLimits.ts";
 import type * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import {
   providerMessageTextWithAttachmentPaths,
@@ -188,6 +190,8 @@ export interface MuseAdapterV2Options {
   readonly createHost?: typeof createMuseSdkHost;
   readonly requestTimeoutMs?: number;
   readonly nativeEventLogger?: ProviderEventLoggers.EventNdjsonLogger;
+  /** Receives the account's subscription usage whenever a host observes new numbers. */
+  readonly onUsageLimits?: ManagedServerProvider["applyUsageLimits"];
   /** Where a turn Muse starts on its own (a finished workflow's report) asks for its run. */
   readonly continuationRequests?: {
     readonly offer: (
@@ -234,6 +238,7 @@ const nativeRef = (nativeId: string) => ({
 const recordSchema = Schema.Record(Schema.String, Schema.Unknown);
 // Notifications that only add detail. A malformed one is skipped instead of ending the session.
 const INFORMATIONAL_NOTIFICATIONS = new Set([
+  "usage/changed",
   "session/contextUsage",
   "session/tokenUsage",
   "session/todoListChanged",
@@ -1007,6 +1012,12 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
       });
       const handleNotification = Effect.fnUntraced(function* (method: string, data: unknown) {
         const params = yield* decode(recordSchema, data);
+        // Account-wide, so it carries no session id.
+        if (method === "usage/changed") {
+          const usage = yield* decode(MuseSubscriptionUsage, params);
+          if (options.onUsageLimits) yield* options.onUsageLimits(museUsageToUpdate(usage));
+          return;
+        }
         if (params.sessionId !== nativeSessionId) return;
         if (method === "view/gap")
           return yield* protocolError("Muse delivery gap requires session recovery");

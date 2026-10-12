@@ -10,6 +10,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import { createMuseSdkHost, makeMuseEnvironment } from "./sdk.ts";
 import { parseMuseVersion } from "./maintenance.ts";
 import { discoverMuseModels, museModelCapabilities } from "./modelCatalog.ts";
+import { museUsageLimitsBeforeTurn } from "./usageLimits.ts";
 import {
   buildServerProvider,
   COMPACT_SLASH_COMMAND,
@@ -141,6 +142,7 @@ export const checkMuseProviderStatus = Effect.fn("checkMuseProviderStatus")(func
       installed: true,
       version,
       auth: { status: "unknown" },
+      usageLimits: museUsageLimitsBeforeTurn(checkedAt),
       ...(models.length > 0
         ? { status: "ready" }
         : {

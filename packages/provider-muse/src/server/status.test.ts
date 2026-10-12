@@ -112,6 +112,8 @@ it.layer(NodeServices.layer)("Muse status", (it) => {
         expect(snapshot.message).toBeUndefined();
         expect(snapshot.slashCommands).toEqual([COMPACT_SLASH_COMMAND]);
         expect(snapshot.auth).toEqual({ status: "unknown" });
+        // A fresh probe host has seen no model response, so it has no usage to report yet.
+        expect(snapshot.usageLimits?.unavailable?.reason).toBe("probeFailed");
         expect(snapshot.version).toBe("1.0.3-R2198.1");
         expect(snapshot.models.map((model) => model.slug)).toEqual([
           "muse-discovered",
