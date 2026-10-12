@@ -173,6 +173,11 @@ const makeFakeMuse = Effect.fnUntraced(function* (idPrefix = "native") {
       Effect.sync(() => {
         notify({ jsonrpc: "2.0", method, params: { sessionId, ...params } });
       }),
+    /** An account-wide notification, which names no session. */
+    emitUnscoped: (method: string, params: Record<string, unknown>) =>
+      Effect.sync(() => {
+        notify({ jsonrpc: "2.0", method, params });
+      }),
     takeCall: Effect.fnUntraced(function* (method: string) {
       while (true) {
         const call = yield* Queue.take(requests);
@@ -191,7 +196,7 @@ const makeHarness = Effect.fnUntraced(function* (
   policy = runtimePolicy,
   overrides: Pick<
     MuseAdapterV2Options,
-    "createHost" | "nativeEventLogger" | "modelCatalog" | "continuationRequests"
+    "createHost" | "nativeEventLogger" | "modelCatalog" | "continuationRequests" | "onUsageLimits"
   > = {},
 ) {
   let hostCount = 0;
@@ -545,6 +550,57 @@ describe("MuseAdapterV2", () => {
       const terminal = yield* harness.takeEvent("turn.terminal");
       assert.strictEqual(terminal.status, "completed");
       assert.strictEqual(fake.closeCount(), 0);
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("forwards Muse's account usage, which names no session, as limit windows", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeMuse();
+      const updates: Array<Parameters<NonNullable<MuseAdapterV2Options["onUsageLimits"]>>[0]> = [];
+      const harness = yield* makeHarness(
+        fake,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { onUsageLimits: (update) => Effect.sync(() => void updates.push(update)) },
+      );
+      const { nativeId } = yield* startConversation(harness, fake);
+      // Captured from Muse 1.4.6 after a turn.
+      yield* fake.emitUnscoped("usage/changed", {
+        window: { usedPercent: 4, windowDurationMins: 300, resetsAtMs: 1791853028000 },
+        weekly: { usedPercent: 1, resetsAtMs: 1792368000000 },
+        tier: "27681527378179523",
+        observedAtMs: 1791835116997,
+      });
+      yield* fake.emitUnscoped("usage/changed", { window: "not usage" });
+      yield* fake.emit("turn/completed", { turnId: nativeId, terminal: "completed" });
+      const terminal = yield* harness.takeEvent("turn.terminal");
+      assert.strictEqual(terminal.status, "completed");
+      assert.deepStrictEqual(updates, [
+        {
+          checkedAt: "2026-10-12T19:58:36.997Z",
+          windows: [
+            {
+              id: "window",
+              kind: "session",
+              label: "Session",
+              usedPercent: 4,
+              resetsAt: "2026-10-13T00:57:08.000Z",
+              windowDurationMins: 300,
+            },
+            {
+              id: "weekly",
+              kind: "weekly",
+              label: "Weekly",
+              usedPercent: 1,
+              resetsAt: "2026-10-19T00:00:00.000Z",
+              windowDurationMins: 10080,
+            },
+          ],
+        },
+      ]);
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
