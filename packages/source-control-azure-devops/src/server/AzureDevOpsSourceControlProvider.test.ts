@@ -27,7 +27,6 @@ it.effect("maps Azure DevOps PR summaries into provider-neutral change requests"
           isCrossRepository: false,
           closedAt: "2026-08-23T10:00:00Z",
           updatedAt: Option.none(),
-          isCrossRepository: false,
         }),
     });
 
@@ -75,7 +74,7 @@ it.effect("preserves Azure DevOps fork provenance in provider-neutral change req
     });
 
     assert.deepStrictEqual(changeRequest, {
-      provider: "azure-devops",
+      provider: SourceControlProviderKind.make("azure-devops"),
       number: 43,
       title: "Add Azure fork support",
       url: "https://dev.azure.com/acme/target-project/_git/repo/pullrequest/43",

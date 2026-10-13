@@ -55,8 +55,6 @@ const AzureDevOpsPullRequestSchema = Schema.Struct({
   targetRefName: TrimmedNonEmptyString,
   status: Schema.String,
   isDraft: Schema.optional(Schema.Boolean),
-  /** The fork the head branch lives in. `az` prints `null` for a pull request from the same repo. */
-  forkSource: Schema.optional(Schema.Unknown),
   creationDate: Schema.optional(Schema.OptionFromNullOr(Schema.DateTimeUtcFromString)),
   closedDate: Schema.optional(Schema.OptionFromNullOr(Schema.DateTimeUtcFromString)),
   _links: Schema.optional(
