@@ -14,6 +14,7 @@ import {
   type ProviderInstanceId,
   type ScopedThreadRef,
   type SidebarProjectGroupingMode,
+  type SidebarUsageLimitsLayout,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { presentThreadShell } from "@t3tools/client-runtime/state/shell";
@@ -185,6 +186,12 @@ const RESPONSE_STREAMING_MODE_LABELS: Record<ResponseStreamingMode, string> = {
 const RESPONSE_STREAMING_MODE_DESCRIPTIONS: Record<ResponseStreamingMode, string> = {
   turn: "Text appears once the agent finishes its turn.",
   paragraph: "Each paragraph or code block appears as soon as it is complete.",
+};
+
+const SIDEBAR_USAGE_LIMITS_LAYOUT_LABELS: Record<SidebarUsageLimitsLayout, string> = {
+  auto: "Automatic",
+  "one-row": "One row",
+  "two-rows": "Two rows",
 };
 
 const SIDEBAR_PROJECT_SORT_ORDER_LABELS: Record<SidebarProjectSortOrder, string> = {
@@ -574,6 +581,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.sidebarUsageLimitsEnabled !== DEFAULT_UNIFIED_SETTINGS.sidebarUsageLimitsEnabled
         ? ["Usage limits in sidebar"]
         : []),
+      ...(settings.sidebarUsageLimitsLayout !== DEFAULT_UNIFIED_SETTINGS.sidebarUsageLimitsLayout
+        ? ["Usage limits layout"]
+        : []),
       ...(settings.sidebarProjectSortOrder !== DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder
         ? ["Project order"]
         : []),
@@ -719,6 +729,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarWorkingShelfEnabled,
       settings.sidebarThreadPreviewCount,
       settings.sidebarUsageLimitsEnabled,
+      settings.sidebarUsageLimitsLayout,
       settings.showSkillsInSlashMenu,
       settings.timestampFormat,
       settings.notificationMode,
@@ -816,6 +827,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       panelAnimationDurationMs: DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs,
       sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
       sidebarUsageLimitsEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarUsageLimitsEnabled,
+      sidebarUsageLimitsLayout: DEFAULT_UNIFIED_SETTINGS.sidebarUsageLimitsLayout,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
       sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
@@ -2392,6 +2404,51 @@ export function GeneralSettingsPanel() {
               }
               aria-label="Usage limits in sidebar"
             />
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("sidebar-usage-limits-layout")}
+          description="Automatic wraps the usage limits onto two rows once more than three providers report limits."
+          resetAction={
+            settings.sidebarUsageLimitsLayout !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarUsageLimitsLayout ? (
+              <SettingResetButton
+                label="usage limits layout"
+                onClick={() =>
+                  updateSettings({
+                    sidebarUsageLimitsLayout: DEFAULT_UNIFIED_SETTINGS.sidebarUsageLimitsLayout,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.sidebarUsageLimitsLayout}
+              disabled={!settings.sidebarUsageLimitsEnabled}
+              onValueChange={(value) => {
+                if (value === "auto" || value === "one-row" || value === "two-rows") {
+                  updateSettings({ sidebarUsageLimitsLayout: value });
+                }
+              }}
+            >
+              <SelectTrigger size="sm" className="w-full sm:w-40" aria-label="Usage limits layout">
+                <SelectValue>
+                  {SIDEBAR_USAGE_LIMITS_LAYOUT_LABELS[settings.sidebarUsageLimitsLayout]}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="auto">
+                  {SIDEBAR_USAGE_LIMITS_LAYOUT_LABELS.auto}
+                </SelectItem>
+                <SelectItem hideIndicator value="one-row">
+                  {SIDEBAR_USAGE_LIMITS_LAYOUT_LABELS["one-row"]}
+                </SelectItem>
+                <SelectItem hideIndicator value="two-rows">
+                  {SIDEBAR_USAGE_LIMITS_LAYOUT_LABELS["two-rows"]}
+                </SelectItem>
+              </SelectPopup>
+            </Select>
           }
         />
 

@@ -13,6 +13,7 @@ import { useSidebar } from "../ui/sidebar";
 import { readUsagePagePreferences, saveUsagePagePreferences } from "../usage/usagePagePreferences";
 import {
   collectSidebarLimits,
+  sidebarLimitColumns,
   type SidebarLimitTone,
   type SidebarLimitView,
 } from "./SidebarUsageLimits.logic";
@@ -36,6 +37,7 @@ export function SidebarUsageLimitsPill() {
 function SidebarUsageLimitsPillContent() {
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
+  const layout = useClientSettings((settings) => settings.sidebarUsageLimitsLayout);
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
   // Anchored once per mount: the clock only feeds pace, which the pill does
   // not show, so re-pooling on every tick would repaint the sidebar for nothing.
@@ -56,7 +58,10 @@ function SidebarUsageLimitsPillContent() {
     <div
       role="group"
       aria-label="Usage limits"
-      className="flex h-7 w-full items-stretch overflow-hidden rounded-lg bg-sidebar-control-surface text-xs font-medium"
+      className="grid w-full auto-rows-[1.75rem] overflow-hidden rounded-lg bg-sidebar-control-surface text-xs font-medium"
+      style={{
+        gridTemplateColumns: `repeat(${sidebarLimitColumns(limits.length, layout)}, minmax(0, 1fr))`,
+      }}
     >
       {limits.map((limit) => (
         <SidebarLimitSegment key={limit.driver} limit={limit} onClick={openLimits} />
@@ -82,7 +87,7 @@ function SidebarLimitSegment({
             type="button"
             aria-label={`${label}: ${limit.remainingPercent}% left. Open usage limits.`}
             className={cn(
-              "flex min-w-0 flex-1 items-center justify-center gap-1.5 px-2 outline-none transition-colors hover:bg-sidebar-row-hover focus-visible:bg-sidebar-row-hover",
+              "flex min-w-0 items-center justify-center gap-1.5 px-2 outline-none transition-colors hover:bg-sidebar-row-hover focus-visible:bg-sidebar-row-hover",
               TONE_STYLES[limit.tone],
             )}
             onClick={onClick}

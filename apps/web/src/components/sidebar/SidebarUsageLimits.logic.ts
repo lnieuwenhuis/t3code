@@ -1,4 +1,4 @@
-import type { ServerProvider } from "@t3tools/contracts";
+import type { ServerProvider, SidebarUsageLimitsLayout } from "@t3tools/contracts";
 import { collectLimitAccounts, collectLimitPools } from "@t3tools/shared/usageLimits";
 
 /** Neutral until a quarter is left, then warning, then destructive at a tenth. */
@@ -6,6 +6,8 @@ export type SidebarLimitTone = "ok" | "low" | "critical";
 
 const LOW_REMAINING_PERCENT = 25;
 const CRITICAL_REMAINING_PERCENT = 10;
+/** Past this many providers one row leaves each segment too narrow, so `auto` wraps. */
+const AUTO_ONE_ROW_MAX_SEGMENTS = 3;
 
 export interface SidebarLimitWindow {
   /** `kind:id`, since Codex reuses `primary` for a session window on one plan and a monthly one on another. */
@@ -31,6 +33,19 @@ export function limitTone(remainingPercent: number): SidebarLimitTone {
   if (remainingPercent <= CRITICAL_REMAINING_PERCENT) return "critical";
   if (remainingPercent <= LOW_REMAINING_PERCENT) return "low";
   return "ok";
+}
+
+/**
+ * Columns for the pill's segment grid. Two rows split the providers as evenly
+ * as possible, the extra one landing on the top row.
+ */
+export function sidebarLimitColumns(
+  segmentCount: number,
+  layout: SidebarUsageLimitsLayout,
+): number {
+  const twoRows =
+    layout === "two-rows" || (layout === "auto" && segmentCount > AUTO_ONE_ROW_MAX_SEGMENTS);
+  return Math.max(1, Math.ceil(segmentCount / (twoRows ? 2 : 1)));
 }
 
 /**
