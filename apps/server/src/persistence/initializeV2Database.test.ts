@@ -10,10 +10,10 @@ import { ThreadId } from "@t3tools/contracts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
-import * as SqlitePersistence from "./Layers/Sqlite.ts";
+import * as SqlitePersistence from "./Sqlite.ts";
 import { migrationManifest, runMigrations } from "./Migrations.ts";
 import PullRequestFilesViewed from "./Migrations/053_PullRequestFilesViewed.ts";
 import { initializeV2Database } from "./initializeV2Database.ts";
@@ -220,14 +220,14 @@ it.effect("starts fresh without V1 and never imports over existing V2 state", ()
   const destinationPath = NodePath.join(directory, "userdata", "statev2.sqlite");
   return Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
-    const database = SqlitePersistence.layerConfig.pipe(
+    const layerDatabase = SqlitePersistence.layerConfig.pipe(
       Layer.provide(ServerConfig.layer({ ...config, dbPath: destinationPath })),
     );
     yield* Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* sql`CREATE TABLE v2_work (text TEXT)`;
       yield* sql`INSERT INTO v2_work VALUES ('fresh V2 work')`;
-    }).pipe(Effect.provide(database));
+    }).pipe(Effect.provide(layerDatabase));
     const sourcePath = NodePath.join(NodePath.dirname(destinationPath), "state.sqlite");
     assert.isFalse(NodeFS.existsSync(sourcePath));
     NodeFS.writeFileSync(sourcePath, "This source must never be opened once V2 exists");
@@ -235,7 +235,7 @@ it.effect("starts fresh without V1 and never imports over existing V2 state", ()
     yield* Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       assert.equal((yield* sql`SELECT text FROM v2_work`)[0]?.text, "fresh V2 work");
-    }).pipe(Effect.provide(database));
+    }).pipe(Effect.provide(layerDatabase));
   }).pipe(
     Effect.provide(
       ServerConfig.layerTest(directory, directory).pipe(Layer.provideMerge(NodeServices.layer)),

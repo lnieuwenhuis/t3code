@@ -1,3 +1,4 @@
+import { seedUserInputDraftAnswers } from "@t3tools/client-runtime/state/thread-requests";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useCallback, useLayoutEffect, useRef, type Dispatch, type SetStateAction } from "react";
 import { useComposerDraftStore, type DraftId } from "../../composerDraftStore";
@@ -23,16 +24,28 @@ export function usePendingUserInputDraft({
   activePendingUserInput,
   pendingUserInputAnswersByRequestId,
   setPendingUserInputAnswersByRequestId,
+  resolveQuestionDraftTarget,
 }: {
   composerDraftTarget: ScopedThreadRef | DraftId;
   activePendingUserInput: {
     requestId: string;
-    questions: ReadonlyArray<{ id: string; allowCustomAnswer?: boolean | undefined }>;
+    questions: ReadonlyArray<{
+      id: string;
+      allowCustomAnswer?: boolean | undefined;
+      initialAnswer?: string | undefined;
+    }>;
   } | null;
   pendingUserInputAnswersByRequestId: AnswersByRequest;
   setPendingUserInputAnswersByRequestId: Dispatch<SetStateAction<AnswersByRequest>>;
+  /** Draft that holds a question's thread-reference records (and attachments). */
+  resolveQuestionDraftTarget?: (requestId: string, questionId: string) => DraftId | null;
 }) {
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
+  const resolveQuestionDraftTargetRef = useRef(resolveQuestionDraftTarget);
+  resolveQuestionDraftTargetRef.current = resolveQuestionDraftTarget;
+  // Question ids per request, so rescue can still find the question drafts
+  // after the request itself has left pendingUserInputs.
+  const questionIdsByRequestKeyRef = useRef(new Map<string, string[]>());
   const activePendingRequestKey = pendingUserInputRequestKey(
     composerDraftTarget,
     activePendingUserInput?.requestId ?? null,
@@ -117,6 +130,20 @@ export function usePendingUserInputDraft({
       if (text !== null) {
         returnTextToComposerDraft(requestId, text, draftTarget);
       }
+      // Thread-reference records live in the question drafts, which are cleared
+      // once the request is gone; move them with the text they belong to.
+      const store = useComposerDraftStore.getState();
+      const requestKey = pendingUserInputRequestKey(draftTarget, requestId);
+      for (const questionId of questionIdsByRequestKeyRef.current.get(requestKey) ?? []) {
+        const questionTarget = resolveQuestionDraftTargetRef.current?.(requestId, questionId);
+        const records = questionTarget
+          ? (store.getComposerDraft(questionTarget)?.threadContexts ?? [])
+          : [];
+        if (records.length > 0) {
+          store.addThreadContexts(draftTarget, records, { appendReference: false });
+        }
+      }
+      questionIdsByRequestKeyRef.current.delete(requestKey);
     },
     [pendingUserInputAnswersByRequestId, returnTextToComposerDraft],
   );
@@ -137,6 +164,12 @@ export function usePendingUserInputDraft({
   useLayoutEffect(() => {
     const nextRequestId = activePendingUserInput?.requestId ?? null;
     const previous = prevPendingUserInputRef.current;
+    if (activePendingUserInput) {
+      questionIdsByRequestKeyRef.current.set(
+        activePendingRequestKey,
+        activePendingUserInput.questions.map((question) => question.id),
+      );
+    }
     // A thread switch only hides the question, so it neither rescues nor
     // consumes the submitted mark; the real resolve may arrive after the user
     // returns and must still read as an answer, not a cancel.
@@ -180,6 +213,17 @@ export function usePendingUserInputDraft({
           text: draftToCarry,
           unrelatedText: "",
         });
+        // The composer's thread chips move with its text; the question composer
+        // reads them from the question draft only.
+        const store = useComposerDraftStore.getState();
+        const records = store.getComposerDraft(composerDraftTarget)?.threadContexts ?? [];
+        const questionTarget = resolveQuestionDraftTargetRef.current?.(
+          nextRequestId,
+          activePendingFirstQuestionId,
+        );
+        if (records.length > 0 && questionTarget) {
+          store.addThreadContexts(questionTarget, records, { appendReference: false });
+        }
         setPendingUserInputAnswersByRequestId((existing) => ({
           ...existing,
           [activePendingRequestKey]: {
@@ -205,6 +249,15 @@ export function usePendingUserInputDraft({
     rescuePendingUserInputAnswers,
     setPendingUserInputAnswersByRequestId,
   ]);
+  // Carry the user's unsent composer text first; provider initial answers only fill untouched slots.
+  useLayoutEffect(() => {
+    if (!activePendingUserInput) return;
+    setPendingUserInputAnswersByRequestId((existing) => {
+      const drafts = existing[activePendingRequestKey] ?? {};
+      const seeded = seedUserInputDraftAnswers(activePendingUserInput.questions, drafts);
+      return seeded === drafts ? existing : { ...existing, [activePendingRequestKey]: seeded };
+    });
+  }, [activePendingRequestKey, activePendingUserInput, setPendingUserInputAnswersByRequestId]);
   // Persist the full current answer set after edits. A failed submission can
   // contain several answers, so clearing one must retain the others even if
   // this thread is hidden before the request disappears.

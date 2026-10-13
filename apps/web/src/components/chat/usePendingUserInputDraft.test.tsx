@@ -4,6 +4,8 @@ import { act, useLayoutEffect, useMemo, useState } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { useComposerDraftStore } from "../../composerDraftStore";
+import { threadContextRecord } from "../../lib/composerContextRecords";
+import { questionAttachmentDraftId } from "../../questionAttachments";
 import {
   setPendingUserInputCustomAnswer,
   type PendingUserInputDraftAnswer,
@@ -32,10 +34,12 @@ function Composer({
   threadId,
   environment = environmentId,
   pending,
+  initialAnswer,
 }: {
   threadId: ThreadId;
   environment?: EnvironmentId;
   pending: boolean;
+  initialAnswer?: string;
 }) {
   const target = useMemo(() => scopeThreadRef(environment, threadId), [environment, threadId]);
   const [answers, setAnswers] = useState<
@@ -43,9 +47,19 @@ function Composer({
   >({});
   const lifecycle = usePendingUserInputDraft({
     composerDraftTarget: target,
-    activePendingUserInput: pending ? request : null,
+    activePendingUserInput: pending
+      ? {
+          ...request,
+          questions: request.questions.map((question) => ({
+            ...question,
+            ...(initialAnswer === undefined ? {} : { initialAnswer }),
+          })),
+        }
+      : null,
     pendingUserInputAnswersByRequestId: answers,
     setPendingUserInputAnswersByRequestId: setAnswers,
+    resolveQuestionDraftTarget: (requestId, questionId) =>
+      questionAttachmentDraftId(environment, threadId, requestId, questionId),
   });
   const key = pendingUserInputRequestKey(target, request.requestId);
   useLayoutEffect(() => {
@@ -110,7 +124,59 @@ afterEach(async () => {
   useComposerDraftStore.setState({ draftsByThreadKey: {} });
   vi.unstubAllGlobals();
 });
+const attachedThread = threadContextRecord(
+  scopeThreadRef(environmentId, ThreadId.make("attached-thread")),
+  "Fix login flow",
+);
+function questionDraftTarget(questionId = "question", threadId = threadA) {
+  return questionAttachmentDraftId(environmentId, threadId, request.requestId, questionId);
+}
+function contexts(target: ScopedThreadRef | ReturnType<typeof questionDraftTarget>) {
+  return useComposerDraftStore.getState().getComposerDraft(target)?.threadContexts ?? [];
+}
 describe("pending answer draft ownership through mounted navigation", () => {
+  it("carries thread-reference records into the question draft with the text", async () => {
+    const ownerB = scopeThreadRef(environmentId, threadB);
+    useComposerDraftStore.getState().setPrompt(ownerB, "draft with chip");
+    useComposerDraftStore.getState().addThreadContexts(ownerB, [attachedThread]);
+    await navigate(threadB, true);
+    expect(composer.answer).toContain("draft with chip");
+    expect(contexts(questionDraftTarget("question", threadB))).toEqual([attachedThread]);
+  });
+  it("returns question thread-reference records to the composer when dismissed", async () => {
+    await act(() =>
+      useComposerDraftStore
+        .getState()
+        .addThreadContexts(questionDraftTarget("question-two"), [attachedThread], {
+          appendReference: false,
+        }),
+    );
+    expect(contexts(ownerA)).toEqual([]);
+    await navigate(threadA, false);
+    expect(contexts(ownerA)).toEqual([attachedThread]);
+  });
+  it("seeds provider answers without overwriting carried drafts or cleared edits", async () => {
+    useComposerDraftStore
+      .getState()
+      .setPrompt(scopeThreadRef(environmentId, threadB), "unsent B draft");
+    await act(() =>
+      renderer.update(<Composer threadId={threadB} pending initialAnswer="provider seed" />),
+    );
+    expect(composer.answer).toBe("unsent B draft");
+    await act(() => composer.edit(""));
+    await act(() =>
+      renderer.update(<Composer threadId={threadB} pending initialAnswer="changed seed" />),
+    );
+    expect(composer.answer).toBe("");
+  });
+  it("uses the provider initial answer when the composer has no draft", async () => {
+    await act(() =>
+      renderer.update(<Composer threadId={threadB} pending initialAnswer="provider seed" />),
+    );
+    expect(composer.answer).toBe("provider seed");
+    await navigate(threadB, false);
+    expect(prompt(scopeThreadRef(environmentId, threadB))).toBe("provider seed\n\nprovider seed");
+  });
   it("returns every typed answer to the draft when an async question is dismissed", async () => {
     await act(() => composer.edit("first unsent answer"));
     await act(() => composer.edit("second unsent answer", "question-two"));

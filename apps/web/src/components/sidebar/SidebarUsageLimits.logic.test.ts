@@ -107,13 +107,13 @@ describe("collectSidebarLimits", () => {
     });
     expect(codex?.windows).toEqual([
       {
-        id: "session:five_hour",
+        id: "session:session",
         label: "Session",
         remainingPercent: 60,
         resetsAt: Date.parse(session.resetsAt),
       },
       {
-        id: "weekly:seven_day",
+        id: "weekly:weekly",
         label: "Weekly",
         remainingPercent: 15,
         resetsAt: Date.parse(weekly.resetsAt),
@@ -226,8 +226,8 @@ describe("collectSidebarLimits", () => {
       now,
     );
     expect(codex?.windows.map((window) => [window.id, window.remainingPercent])).toEqual([
-      ["session:primary", 70],
-      ["monthly:primary", 30],
+      ["session:session", 70],
+      ["monthly:monthly", 30],
     ]);
   });
 
