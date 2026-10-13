@@ -231,7 +231,7 @@ const ensureSymlink = Effect.fn("CodexHomeLayout.ensureSymlink")(function* (inpu
   });
 
   const createLink = Effect.gen(function* () {
-    if (process.platform === "win32") {
+    if (yield* HostProcess.isWindows) {
       const info = yield* input.fileSystem.stat(target);
       if (info.type === "Directory") {
         return yield* Effect.tryPromise(() => NodeFSP.symlink(target, link, "junction"));
