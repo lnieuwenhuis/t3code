@@ -7,7 +7,7 @@ export type SidebarLimitTone = "ok" | "low" | "critical";
 const LOW_REMAINING_PERCENT = 25;
 const CRITICAL_REMAINING_PERCENT = 10;
 /** Past this many providers one row leaves each segment too narrow, so `auto` wraps. */
-const AUTO_ONE_ROW_MAX_SEGMENTS = 4;
+const AUTO_ONE_ROW_MAX_SEGMENTS = 3;
 
 export interface SidebarLimitWindow {
   /** `kind:id`, since Codex reuses `primary` for a session window on one plan and a monthly one on another. */

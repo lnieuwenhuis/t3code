@@ -2335,7 +2335,7 @@ export function GeneralSettingsPanel() {
         />
         <SettingsRow
           {...searchableSetting("sidebar-usage-limits-layout")}
-          description="Automatic wraps the usage limits onto two rows once more than four providers report limits."
+          description="Automatic wraps the usage limits onto two rows once more than three providers report limits."
           resetAction={
             settings.sidebarUsageLimitsLayout !==
             DEFAULT_UNIFIED_SETTINGS.sidebarUsageLimitsLayout ? (

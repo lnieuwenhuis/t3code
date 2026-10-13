@@ -68,8 +68,9 @@ describe("limitTone", () => {
 });
 
 describe("sidebarLimitColumns", () => {
-  it("keeps up to four providers on one row, then wraps onto two in auto", () => {
-    expect(sidebarLimitColumns(4, "auto")).toBe(4);
+  it("keeps up to three providers on one row, then wraps onto two in auto", () => {
+    expect(sidebarLimitColumns(3, "auto")).toBe(3);
+    expect(sidebarLimitColumns(4, "auto")).toBe(2);
     expect(sidebarLimitColumns(5, "auto")).toBe(3);
     expect(sidebarLimitColumns(8, "auto")).toBe(4);
   });
