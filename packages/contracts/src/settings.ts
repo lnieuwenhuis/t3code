@@ -59,6 +59,11 @@ export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 // wire field keeps its decoding default below.
 const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
 
+// How the sidebar usage limits pill lays out its provider segments. `auto`
+// wraps onto a second row once one row would leave each segment too cramped.
+export const SidebarUsageLimitsLayout = Schema.Literals(["auto", "one-row", "two-rows"]);
+export type SidebarUsageLimitsLayout = typeof SidebarUsageLimitsLayout.Type;
+
 export const SidebarProjectGroupingMode = Schema.Literals([
   "repository",
   "repository_path",
@@ -464,6 +469,9 @@ export const ClientSettingsSchema = Schema.Struct({
   // from the same provider snapshots as Usage → Limits. Opt-in: it is extra
   // chrome for everyone whose providers report limits.
   sidebarUsageLimitsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  sidebarUsageLimitsLayout: SidebarUsageLimitsLayout.pipe(
+    Schema.withDecodingDefault(Effect.succeed("auto")),
+  ),
   // Beta: working and monitoring threads fold into a Working shelf and return
   // to the top of the inbox once they need the user. The inbox then orders by
   // time, so manual placement there is ignored (and kept) while it is on.
@@ -1780,6 +1788,7 @@ export const ClientSettingsPatch = Schema.Struct({
   showSkillsInSlashMenu: Schema.optionalKey(Schema.Boolean),
   legacySidebarEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarUsageLimitsEnabled: Schema.optionalKey(Schema.Boolean),
+  sidebarUsageLimitsLayout: Schema.optionalKey(SidebarUsageLimitsLayout),
   sidebarWorkingShelfEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(

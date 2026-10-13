@@ -648,6 +648,16 @@ describe("ClientSettings sidebar", () => {
     ).toBe(true);
   });
 
+  it("lays the sidebar usage limits pill out automatically by default", () => {
+    expect(decodeClientSettings({}).sidebarUsageLimitsLayout).toBe("auto");
+    expect(
+      decodeClientSettings({ sidebarUsageLimitsLayout: "two-rows" }).sidebarUsageLimitsLayout,
+    ).toBe("two-rows");
+    expect(
+      decodeClientSettingsPatch({ sidebarUsageLimitsLayout: "one-row" }).sidebarUsageLimitsLayout,
+    ).toBe("one-row");
+  });
+
   it("keeps unpin confirmation opt-in and patchable", () => {
     expect(decodeClientSettings({}).confirmThreadUnpin).toBe(false);
     expect(decodeClientSettingsPatch({ confirmThreadUnpin: true }).confirmThreadUnpin).toBe(true);

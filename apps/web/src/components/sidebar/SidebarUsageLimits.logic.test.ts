@@ -6,7 +6,7 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { collectSidebarLimits, limitTone } from "./SidebarUsageLimits.logic";
+import { collectSidebarLimits, limitTone, sidebarLimitColumns } from "./SidebarUsageLimits.logic";
 
 const now = Date.parse("2026-09-03T12:00:00.000Z");
 
@@ -64,6 +64,24 @@ describe("limitTone", () => {
     expect(limitTone(11)).toBe("low");
     expect(limitTone(10)).toBe("critical");
     expect(limitTone(0)).toBe("critical");
+  });
+});
+
+describe("sidebarLimitColumns", () => {
+  it("keeps up to four providers on one row, then wraps onto two in auto", () => {
+    expect(sidebarLimitColumns(4, "auto")).toBe(4);
+    expect(sidebarLimitColumns(5, "auto")).toBe(3);
+    expect(sidebarLimitColumns(8, "auto")).toBe(4);
+  });
+
+  it("honours an explicit row choice", () => {
+    expect(sidebarLimitColumns(6, "one-row")).toBe(6);
+    expect(sidebarLimitColumns(3, "two-rows")).toBe(2);
+  });
+
+  it("never drops below one column", () => {
+    expect(sidebarLimitColumns(1, "two-rows")).toBe(1);
+    expect(sidebarLimitColumns(0, "auto")).toBe(1);
   });
 });
 

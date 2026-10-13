@@ -281,6 +281,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["quota remaining rate limit codex claude footer subscription"],
   },
   {
+    id: "sidebar-usage-limits-layout",
+    title: "Usage limits layout",
+    to: "/settings/general",
+    searchTerms: ["sidebar quota pill rows two lines wrap cramped providers"],
+  },
+  {
     id: "project-grouping",
     title: "Project grouping",
     to: "/settings/general",
