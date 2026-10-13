@@ -120,7 +120,6 @@ describe("AzureDevOpsCli.layer", () => {
       mockRun.mockReturnValueOnce(
         Effect.succeed(
           processOutput(
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
             JSON.stringify({
               pullRequestId: 43,
               title: "Add Azure fork support",
@@ -162,7 +161,6 @@ describe("AzureDevOpsCli.layer", () => {
       mockRun.mockReturnValueOnce(
         Effect.succeed(
           processOutput(
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
             JSON.stringify({
               pullRequestId: 44,
               title: "Add Azure fork support",
@@ -197,7 +195,6 @@ describe("AzureDevOpsCli.layer", () => {
       mockRun.mockReturnValueOnce(
         Effect.succeed(
           processOutput(
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
             JSON.stringify({
               pullRequestId: 45,
               title: "Add Azure fork support",
@@ -357,7 +354,6 @@ describe("AzureDevOpsCli.layer", () => {
       mockRun.mockReturnValueOnce(
         Effect.succeed(
           processOutput(
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
             JSON.stringify({
               name: "repo-fork",
               webUrl: "https://dev.azure.com/acme/fork-project/_git/repo-fork",

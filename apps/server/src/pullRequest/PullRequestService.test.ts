@@ -5047,7 +5047,7 @@ it.effect("an invalidated detail read sees an external change a plain re-read ho
     const service = yield* makeService({
       projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
       providers: [
-        fakeProvider("github", {
+        fakeProvider(SourceControlProviderKind.make("github"), {
           getChangeRequest: () =>
             Effect.gen(function* () {
               calls += 1;
@@ -5120,7 +5120,7 @@ it.effect("a detail-scoped invalidate refreshes detail without stranding the hel
     const service = yield* makeService({
       projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
       providers: [
-        fakeProvider("github", {
+        fakeProvider(SourceControlProviderKind.make("github"), {
           getChangeRequest: () =>
             Effect.sync(() => {
               detailCalls += 1;
@@ -5171,7 +5171,7 @@ it.effect("recently read scopes retain held responses when epoch maps reach capa
     const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
     let failHost = false;
     const failure = new PullRequestProviderError({
-      provider: "github",
+      provider: SourceControlProviderKind.make("github"),
       operation: "read",
       reason: "failed",
       detail: "HTTP 503",
@@ -5179,7 +5179,7 @@ it.effect("recently read scopes retain held responses when epoch maps reach capa
     const service = yield* makeService({
       projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
       providers: [
-        fakeProvider("github", {
+        fakeProvider(SourceControlProviderKind.make("github"), {
           getChangeRequest: () =>
             failHost ? Effect.fail(failure) : Effect.succeed(hostedChangeRequest("held body", 4)),
           getDiff: () =>
@@ -5206,59 +5206,57 @@ it.effect("recently read scopes retain held responses when epoch maps reach capa
   }),
 );
 
-for (const afterTurn of [false, true]) {
-  it.effect(
-    `evicting invalidation epochs never revives held responses (after turn: ${afterTurn})`,
-    () =>
-      Effect.gen(function* () {
-        const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
-        let version = "old";
-        const service = yield* makeService({
-          projects: [
-            project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
-          ],
-          providers: [
-            fakeProvider("github", {
-              getChangeRequest: () =>
-                Effect.succeed({ ...hostedChangeRequest("body", 4), title: version }),
-              getDiff: (input) =>
-                Effect.succeed({
-                  patch: `${version}:${input.cursor ?? "first"}`,
-                  truncated: false,
-                  nextCursor: input.cursor ? null : "page-2",
-                }),
-            }),
-          ],
-        });
+it.effect.each([false, true])(
+  "evicting invalidation epochs never revives held responses (after turn: %s)",
+  (afterTurn) =>
+    Effect.gen(function* () {
+      const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+      let version = "old";
+      const service = yield* makeService({
+        projects: [
+          project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+        ],
+        providers: [
+          fakeProvider(SourceControlProviderKind.make("github"), {
+            getChangeRequest: () =>
+              Effect.succeed({ ...hostedChangeRequest("body", 4), title: version }),
+            getDiff: (input) =>
+              Effect.succeed({
+                patch: `${version}:${input.cursor ?? "first"}`,
+                truncated: false,
+                nextCursor: input.cursor ? null : "page-2",
+              }),
+          }),
+        ],
+      });
 
-        assert.strictEqual((yield* service.detail(reference)).title, "old");
-        assert.strictEqual((yield* service.diff(reference)).patch, "old:first");
-        assert.strictEqual(
-          (yield* service.diff({ ...reference, cursor: "page-2" })).patch,
-          "old:page-2",
-        );
-        if (afterTurn) {
-          yield* service.refreshAfterTurn(reference.projectId);
-          yield* service.detail(reference);
-          yield* service.diff(reference);
-          yield* service.diff({ ...reference, cursor: "page-2" });
-        }
-        version = "new";
-        yield* service.invalidate({ reference });
-        // Fill the bounded epoch maps with other scopes without evicting the held responses.
-        for (let number = 2; number <= 2_049; number += 1) {
-          yield* service.invalidate({ reference: { ...reference, number } });
-        }
+      assert.strictEqual((yield* service.detail(reference)).title, "old");
+      assert.strictEqual((yield* service.diff(reference)).patch, "old:first");
+      assert.strictEqual(
+        (yield* service.diff({ ...reference, cursor: "page-2" })).patch,
+        "old:page-2",
+      );
+      if (afterTurn) {
+        yield* service.refreshAfterTurn(reference.projectId);
+        yield* service.detail(reference);
+        yield* service.diff(reference);
+        yield* service.diff({ ...reference, cursor: "page-2" });
+      }
+      version = "new";
+      yield* service.invalidate({ reference });
+      // Fill the bounded epoch maps with other scopes without evicting the held responses.
+      for (let number = 2; number <= 2_049; number += 1) {
+        yield* service.invalidate({ reference: { ...reference, number } });
+      }
 
-        assert.strictEqual((yield* service.detail(reference)).title, "new");
-        assert.strictEqual((yield* service.diff(reference)).patch, "new:first");
-        assert.strictEqual(
-          (yield* service.diff({ ...reference, cursor: "page-2" })).patch,
-          "new:page-2",
-        );
-      }),
-  );
-}
+      assert.strictEqual((yield* service.detail(reference)).title, "new");
+      assert.strictEqual((yield* service.diff(reference)).patch, "new:first");
+      assert.strictEqual(
+        (yield* service.diff({ ...reference, cursor: "page-2" })).patch,
+        "new:page-2",
+      );
+    }),
+);
 
 it.effect("a changed updatedAt reloads every held diff page after detail-only invalidation", () =>
   Effect.gen(function* () {
@@ -5269,7 +5267,7 @@ it.effect("a changed updatedAt reloads every held diff page after detail-only in
     const service = yield* makeService({
       projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
       providers: [
-        fakeProvider("github", {
+        fakeProvider(SourceControlProviderKind.make("github"), {
           getChangeRequest: () => Effect.succeed({ ...hostedChangeRequest("body", 4), updatedAt }),
           getDiff: (input) =>
             Effect.sync(() => {
@@ -5322,12 +5320,12 @@ it.effect("full invalidation reloads every held diff page after a failed detail 
     const service = yield* makeService({
       projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
       providers: [
-        fakeProvider("github", {
+        fakeProvider(SourceControlProviderKind.make("github"), {
           getChangeRequest: () =>
             failDetail
               ? Effect.fail(
                   new PullRequestProviderError({
-                    provider: "github",
+                    provider: SourceControlProviderKind.make("github"),
                     operation: "getChangeRequest",
                     reason: "failed",
                     detail: "HTTP 503",
