@@ -2806,6 +2806,21 @@ export const make = Effect.gen(function* () {
     ]);
   const refEpoch = (ref: PullRequestRef) => mapEpoch(refEpochs, ref);
   const diffEpoch = (ref: PullRequestRef) => mapEpoch(diffEpochs, ref);
+  /**
+   * The project epoch a pull request was first read merged under. A merged pull request cannot
+   * change again, so a turn in its project no longer moves its key; otherwise every reader showing
+   * it would read the host again after every turn. A refresh or a mutation still moves it.
+   */
+  const mergedEpochs = new Map<string, number>();
+  const noteMerged = (ref: PullRequestRef) => {
+    const scope = refScope(ref);
+    if (mergedEpochs.has(scope)) return;
+    if (mergedEpochs.size >= REF_EPOCH_CAPACITY) {
+      const oldest = mergedEpochs.keys().next().value;
+      if (oldest !== undefined) mergedEpochs.delete(oldest);
+    }
+    mergedEpochs.set(scope, projectEpochs.get(ref.projectId) ?? projectEpochFloor);
+  };
   // Keys carry the reference back out of the cache loader, so the slot layout is shared with
   // `refOfCacheKey` rather than read positionally at every loader.
   const refCacheKey = (ref: CredentialRef, epoch = refEpoch(ref)) =>
@@ -2863,7 +2878,10 @@ export const make = Effect.gen(function* () {
     const epoch = epochs.get(scope) ?? bumpMapEpoch(epochs, ref);
     epochs.delete(scope);
     epochs.set(scope, epoch);
-    return Math.max(projectEpochs.get(ref.projectId) ?? projectEpochFloor, epoch);
+    return Math.max(
+      mergedEpochs.get(scope) ?? projectEpochs.get(ref.projectId) ?? projectEpochFloor,
+      epoch,
+    );
   };
   const bumpDetailEpoch = (ref: PullRequestRef) => bumpMapEpoch(refEpochs, ref);
   const bumpRefEpoch = (ref: PullRequestRef) => {
@@ -3229,6 +3247,7 @@ export const make = Effect.gen(function* () {
     // regression and never ask the host again.
     const read = Cache.get(detailCache, key).pipe(
       Effect.tap((value) => {
+        if (value.state === "merged") noteMerged(input);
         const summary = summaryFromDetail(value, lastGoodSummary.peek(key));
         return noteDetailReading(input, summary).pipe(
           Effect.andThen(
