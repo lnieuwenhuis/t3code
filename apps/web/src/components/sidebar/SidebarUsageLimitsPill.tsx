@@ -1,7 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { formatDuration } from "@t3tools/shared/usageLimits";
 import { useNavigate } from "@tanstack/react-router";
-import { useCallback, useMemo, useState } from "react";
+import { useState } from "react";
 
 import { useClientSettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
@@ -28,6 +28,7 @@ const TONE_STYLES: Record<SidebarLimitTone, string> = {
  * Remaining subscription quota per provider, one segment each, sitting above
  * the sidebar's utility row. Reads the provider snapshots every client already
  * holds, so it costs no request; a segment opens Usage → Limits for the rest.
+ * Plain presentations strip providers, so this reads the variant that keeps them.
  */
 export function SidebarUsageLimitsPill() {
   const enabled = useClientSettings((settings) => settings.sidebarUsageLimitsEnabled);
@@ -38,19 +39,16 @@ function SidebarUsageLimitsPillContent() {
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
   const layout = useClientSettings((settings) => settings.sidebarUsageLimitsLayout);
-  const presentations = useAtomValue(environmentPresentations.presentationsAtom);
+  const presentations = useAtomValue(environmentPresentations.presentationsWithProvidersAtom);
   // Anchored once per mount: the clock only feeds pace, which the pill does
   // not show, so re-pooling on every tick would repaint the sidebar for nothing.
   const [mountedAt] = useState(() => Date.now());
-  const limits = useMemo(
-    () => collectSidebarLimits(presentations, mountedAt),
-    [mountedAt, presentations],
-  );
-  const openLimits = useCallback(() => {
+  const limits = collectSidebarLimits(presentations, mountedAt);
+  const openLimits = () => {
     if (isMobile) setOpenMobile(false);
     saveUsagePagePreferences({ ...readUsagePagePreferences(), metric: "limits" });
     void navigate({ to: "/usage" });
-  }, [isMobile, navigate, setOpenMobile]);
+  };
 
   if (limits.length === 0) return null;
 
