@@ -51,6 +51,7 @@ import {
   MuseDelta,
   MuseItemEvent,
   MuseSessionResult,
+  MuseSubscriptionUsage,
   MuseTokenUsageEvent,
   MuseTodoList,
   MuseTurnRetryScheduled,
@@ -63,6 +64,11 @@ import {
   type MuseItem,
 } from "./protocol.ts";
 import {
+  isMuseUsageLimitFailure,
+  museUsageLimitResetAt,
+  museUsageToUpdate,
+} from "./usageLimits.ts";
+import {
   createMuseSdkHostEffect,
   museApprovalMode,
   musePermissionProfile,
@@ -70,7 +76,6 @@ import {
   type createMuseSdkHost,
   type MuseSdkHost,
 } from "./sdk.ts";
-import { MuseSubscriptionUsage, museUsageToUpdate } from "./usageLimits.ts";
 import type * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import {
   providerMessageTextWithAttachmentPaths,
@@ -331,6 +336,8 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
       let thread: OrchestrationV2ProviderThread | undefined;
       let active: ActiveTurn | undefined;
       let lastProviderTurn: OrchestrationV2ProviderTurn | undefined;
+      // Meta's newest subscription windows, for when a turn stopped at a usage limit can resume.
+      let latestSubscriptionUsage: MuseSubscriptionUsage | undefined;
       const agentEndedAt = new Map<string, DateTime.Utc>();
       const resolveModel = Effect.fnUntraced(function* (selection: ModelSelection) {
         if (selection.model !== MUSE_DEFAULT_MODEL) return selection.model;
@@ -940,6 +947,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
         status: "completed" | "cancelled" | "interrupted" | "failed",
         detail?: string,
         disposition: "reusable" | "broken" = "reusable",
+        quota?: { readonly resetsAtMs: number },
       ) {
         if (active !== turn || seenTerminals.has(turn.nativeId)) return;
         seenTerminals.add(turn.nativeId);
@@ -975,9 +983,25 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
         yield* updateSession(disposition === "broken" ? "error" : "ready", detail ?? null);
         active = undefined;
         if (status === "failed") {
+          const usageLimited =
+            disposition === "reusable" && (quota !== undefined || isMuseUsageLimitFailure(detail));
           const failure = makeProviderFailure({
-            class: disposition === "broken" ? "transport_error" : "provider_error",
+            class:
+              disposition === "broken"
+                ? "transport_error"
+                : usageLimited
+                  ? "usage_limit"
+                  : "provider_error",
             message: detail ?? "Muse turn failed.",
+            ...(usageLimited
+              ? {
+                  resetAt: museUsageLimitResetAt(
+                    latestSubscriptionUsage,
+                    DateTime.toEpochMillis(completedAt),
+                    { quota, message: detail },
+                  ),
+                }
+              : {}),
           });
           const base = baseItem(turn, `failure:${turn.nativeId}`, completedAt);
           yield* emit({
@@ -987,7 +1011,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
               ...base,
               type: "error",
               status: "failed",
-              title: null,
+              title: usageLimited ? "Usage limit reached" : null,
               completedAt,
               failure,
             },
@@ -1251,9 +1275,10 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
       });
       const handleNotification = Effect.fnUntraced(function* (method: string, data: unknown) {
         const params = yield* decode(recordSchema, data);
-        // Account-wide, so it carries no session id.
+        // Account-wide, so it names no session: Meta's subscription windows after a response.
         if (method === "usage/changed") {
           const usage = yield* decode(MuseSubscriptionUsage, params);
+          latestSubscriptionUsage = usage;
           if (options.onUsageLimits) yield* options.onUsageLimits(museUsageToUpdate(usage));
           return;
         }
@@ -1428,7 +1453,13 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
                     ? "interrupted"
                     : "cancelled"
                   : "failed";
-            yield* finish(turn, status, result.error?.message ?? result.reason);
+            yield* finish(
+              turn,
+              status,
+              result.error?.message ?? result.reason,
+              "reusable",
+              result.error?.quota,
+            );
             break;
           }
           case "approval/requested":
