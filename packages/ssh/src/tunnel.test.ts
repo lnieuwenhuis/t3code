@@ -507,7 +507,8 @@ describe("ssh tunnel scripts", () => {
               kills += 1;
             });
           }
-          if (args.includes("--")) return makeSuccessfulProcess('{"remotePort":3773}\n');
+          if (args.some((arg, index) => arg === "-s" && args[index + 1] === "--"))
+            return makeSuccessfulProcess('{"remotePort":3773}\n');
           if (args.includes("sh")) stops += 1;
           return makeSuccessfulProcess("");
         }),
@@ -602,6 +603,7 @@ describe("ssh tunnel scripts", () => {
         assert.include(firstTunnelArgs, "ControlMaster=no");
         assert.include(firstTunnelArgs, "ControlPath=none");
         assert.include(firstTunnelArgs, "ControlPersist=no");
+        assert.deepEqual(firstTunnelArgs?.slice(-2), ["--", "julius@devbox"]);
 
         const disconnected = yield* Effect.result(manager.disconnectEnvironment(target));
         if (mode === "failed stop") {
