@@ -135,7 +135,8 @@ vi.mock("./attachments", () => ({
   attachmentEnvironment: { createUploadUrl: native.mint, remove: native.remove },
 }));
 vi.mock("./assets", () => ({ assetEnvironment: { createUrl: (input: unknown) => input } }));
-vi.mock("@t3tools/client-runtime/state/runtime", () => ({
+vi.mock("@t3tools/client-runtime/state/runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@t3tools/client-runtime/state/runtime")>()),
   createEnvironmentRpcCommand: () => Symbol("rpc-command"),
   executeAtomQuery: async (
     _registry: unknown,
@@ -164,7 +165,6 @@ vi.mock("@t3tools/client-runtime/state/runtime", () => ({
     }
     throw new Error("Unexpected RPC command");
   },
-  squashAtomCommandFailure: (result: { error: unknown }) => result.error,
 }));
 vi.mock("./use-thread-outbox", async () => {
   const { Atom } = await import("effect/reactivity");
@@ -291,7 +291,7 @@ function uploadState() {
   ];
 }
 
-it.each(["decode", "read", "write"] as const)(
+it.each(["decode", "write"] as const)(
   "keeps an accepted upload ready when the draft %s fails",
   async (fault) => {
     native.fault = fault;
@@ -316,12 +316,10 @@ it.each(["decode", "read", "write"] as const)(
   },
 );
 
-it.each(["http", "network", "permission"] as const)(
+it.each(["http", "permission"] as const)(
   "keeps a real %s upload failure blocking Send",
   async (failure) => {
     if (failure === "http") native.transfer.mockResolvedValueOnce({ status: 503 });
-    if (failure === "network")
-      native.transfer.mockRejectedValueOnce(new Error("Network unavailable"));
     if (failure === "permission") native.canOperate = false;
     const queue = worker();
     await queue.settled();

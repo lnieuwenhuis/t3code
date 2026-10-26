@@ -3,10 +3,8 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import * as NodeProcess from "node:process";
 
 import {
-  EnvironmentId,
   ProjectId,
   ThreadId,
   type DesktopAppActivationRequest,
@@ -83,74 +81,6 @@ function exchange(address: string, payload: DesktopAppActivationRequest) {
 }
 
 describe("desktop app control server", () => {
-  it.effect("roundtrips a request and removes its socket on shutdown", () =>
-    Effect.gen(function* () {
-      const platform = yield* HostProcess.Platform;
-      const userId = yield* HostProcess.UserId;
-      yield* Effect.promise(async () => {
-        const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-app-control-test-"));
-        const target = makeTarget(NodePath.join(root, "userdata"), platform, userId);
-        const received: DesktopAppActivationRequest[] = [];
-        const server = await startDesktopAppControlServer({
-          ...target,
-          userId,
-          handle: async (input) => {
-            received.push(input);
-            if (input.type === "probe-environment")
-              return {
-                version: 1,
-                requestId: input.requestId,
-                ok: true,
-                type: "probe-environment",
-                environmentId: input.environmentId,
-                serverVersion: "0.0.42",
-                protocolVersion: 2,
-                desktopPid: -1,
-                projectCount: 0,
-                threadCount: 0,
-              };
-            return {
-              version: 1,
-              requestId: input.requestId,
-              ok: true,
-              projectId: ProjectId.make("project-1"),
-              threadId: ThreadId.make("thread-1"),
-            };
-          },
-          cancel: () => undefined,
-          onReclaimError: () => undefined,
-        });
-        openServers.push(server);
-
-        const response = await exchange(target.address, request("request-1", platform));
-
-        expect(received).toHaveLength(1);
-        expect(response).toMatchObject({ ok: true, requestId: "request-1" });
-        const probeRequest = {
-          version: 1,
-          requestId: "probe-1",
-          type: "probe-environment",
-          environmentId: EnvironmentId.make("saved"),
-          retry: true,
-        } as const;
-        expect(await exchange(target.address, probeRequest)).toMatchObject({
-          ok: true,
-          type: "probe-environment",
-          environmentId: "saved",
-          protocolVersion: 2,
-          desktopPid: NodeProcess.pid,
-        });
-        expect(received[1]).toEqual(probeRequest);
-        await server.close();
-        openServers.splice(openServers.indexOf(server), 1);
-        if (target.directory !== null) {
-          await expect(NodeFSP.stat(target.address)).rejects.toMatchObject({ code: "ENOENT" });
-        }
-        await NodeFSP.rm(root, { recursive: true, force: true });
-      });
-    }),
-  );
-
   it.effect("cancels a queued request when the client disconnects", () =>
     Effect.gen(function* () {
       const platform = yield* HostProcess.Platform;

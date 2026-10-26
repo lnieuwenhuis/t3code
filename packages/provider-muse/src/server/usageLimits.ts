@@ -64,11 +64,7 @@ export function isMuseUsageLimitFailure(message: string | undefined): boolean {
 const NAMED_RESET =
   /\bresets at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))/i;
 
-/**
- * When a stopped turn can run again: every exhausted window must reset first.
- * The resets come from the typed quota, the time the refusal names, and the
- * used-up windows of the last report before it; the latest one still ahead wins.
- */
+/** Resume only after all exhausted windows reset; use the latest future reset from quota, refusal, or usage. */
 export function museUsageLimitResetAt(
   usage: MuseSubscriptionUsage | undefined,
   nowMs: number,
