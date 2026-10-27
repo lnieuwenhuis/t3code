@@ -391,7 +391,10 @@ export const make = Effect.gen(function* () {
         typeof ready === "boolean" ? ready : ready.workspaceReady,
       );
     }),
-    complete: (response) => Effect.sync(() => broker.complete(response)),
+    // The IPC handler owns the activation-completion span.
+    complete: Effect.fnUntraced(function* (response) {
+      return yield* Effect.sync(() => broker.complete(response));
+    }),
   });
 });
 

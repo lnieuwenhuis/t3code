@@ -1,5 +1,10 @@
 import { EnvironmentId, ThreadId, type ScopedThreadRef } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import {
+  makeThreadRequestsResolvedAnnouncer,
+  onThreadRequestsResolved,
+  pruneResolvedUserInputDrafts,
+} from "@t3tools/client-runtime/state/thread-requests";
 import { act, useLayoutEffect, useMemo, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -45,6 +50,15 @@ function Composer({
   const [answers, setAnswers] = useState<
     Record<string, Record<string, PendingUserInputDraftAnswer>>
   >({});
+  useLayoutEffect(
+    () =>
+      onThreadRequestsResolved(({ environmentId, threadId, pendingRequestIds }) =>
+        setAnswers((existing) =>
+          pruneResolvedUserInputDrafts(existing, environmentId, threadId, pendingRequestIds),
+        ),
+      ),
+    [],
+  );
   const lifecycle = usePendingUserInputDraft({
     composerDraftTarget: target,
     activePendingUserInput: pending
@@ -136,6 +150,34 @@ function contexts(target: ScopedThreadRef | ReturnType<typeof questionDraftTarge
   return useComposerDraftStore.getState().getComposerDraft(target)?.threadContexts ?? [];
 }
 describe("pending answer draft ownership through mounted navigation", () => {
+  it("rescues unsent text and thread references after synchronized request cleanup", async () => {
+    await act(() => composer.edit("unsent answer"));
+    await act(() =>
+      useComposerDraftStore
+        .getState()
+        .addThreadContexts(questionDraftTarget(), [attachedThread], { appendReference: false }),
+    );
+    const announce = makeThreadRequestsResolvedAnnouncer(environmentId, threadA);
+    await act(() => {
+      announce([]);
+      renderer.render(<Composer threadId={threadA} pending={false} />);
+    });
+    expect(prompt()).toBe("unsent answer");
+    expect(contexts(ownerA)).toEqual([attachedThread]);
+    expect(contexts(questionDraftTarget())).toEqual([]);
+  });
+
+  it("does not rescue submitted text after synchronized request cleanup", async () => {
+    await act(() => composer.edit("submitted answer"));
+    await act(() => composer.submit(Promise.resolve()));
+    const announce = makeThreadRequestsResolvedAnnouncer(environmentId, threadA);
+    await act(() => {
+      announce([]);
+      renderer.render(<Composer threadId={threadA} pending={false} />);
+    });
+    expect(prompt()).toBe("");
+  });
+
   it("carries thread-reference records into the question draft with the text", async () => {
     const ownerB = scopeThreadRef(environmentId, threadB);
     useComposerDraftStore.getState().setPrompt(ownerB, "draft with chip");

@@ -1,5 +1,5 @@
 import { seedUserInputDraftAnswers } from "@t3tools/client-runtime/state/thread-requests";
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import type { ScopedThreadRef, ThreadContextRecord } from "@t3tools/contracts";
 import { useCallback, useLayoutEffect, useRef, type Dispatch, type SetStateAction } from "react";
 import { useComposerDraftStore, type DraftId } from "../../composerDraftStore";
 import {
@@ -43,9 +43,16 @@ export function usePendingUserInputDraft({
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
   const resolveQuestionDraftTargetRef = useRef(resolveQuestionDraftTarget);
   resolveQuestionDraftTargetRef.current = resolveQuestionDraftTarget;
-  // Question ids per request, so rescue can still find the question drafts
-  // after the request itself has left pendingUserInputs.
-  const questionIdsByRequestKeyRef = useRef(new Map<string, string[]>());
+  // Synchronized resolution prunes answer and attachment stores before React renders the transition.
+  const snapshotsByRequestKeyRef = useRef(
+    new Map<
+      string,
+      {
+        answers: Record<string, PendingUserInputDraftAnswer>;
+        threadContextsByDraft: Map<DraftId, ReadonlyArray<ThreadContextRecord>>;
+      }
+    >(),
+  );
   const activePendingRequestKey = pendingUserInputRequestKey(
     composerDraftTarget,
     activePendingUserInput?.requestId ?? null,
@@ -119,13 +126,13 @@ export function usePendingUserInputDraft({
     },
     [],
   );
-  // Merges a request's typed custom answers into a thread's composer draft.
-  // Answers by request id are never pruned, so they stay readable after the
-  // request itself has disappeared.
+  // The last committed answers remain available after synchronized draft cleanup.
   const rescuePendingUserInputAnswers = useCallback(
     (requestId: string, draftTarget: ScopedThreadRef | DraftId) => {
+      const requestKey = pendingUserInputRequestKey(draftTarget, requestId);
+      const snapshot = snapshotsByRequestKeyRef.current.get(requestKey);
       const text = collectPendingUserInputCustomAnswers(
-        pendingUserInputAnswersByRequestId[pendingUserInputRequestKey(draftTarget, requestId)],
+        pendingUserInputAnswersByRequestId[requestKey] ?? snapshot?.answers,
       );
       if (text !== null) {
         returnTextToComposerDraft(requestId, text, draftTarget);
@@ -133,17 +140,12 @@ export function usePendingUserInputDraft({
       // Thread-reference records live in the question drafts, which are cleared
       // once the request is gone; move them with the text they belong to.
       const store = useComposerDraftStore.getState();
-      const requestKey = pendingUserInputRequestKey(draftTarget, requestId);
-      for (const questionId of questionIdsByRequestKeyRef.current.get(requestKey) ?? []) {
-        const questionTarget = resolveQuestionDraftTargetRef.current?.(requestId, questionId);
-        const records = questionTarget
-          ? (store.getComposerDraft(questionTarget)?.threadContexts ?? [])
-          : [];
+      for (const [questionTarget, retained] of snapshot?.threadContextsByDraft ?? []) {
+        const records = store.getComposerDraft(questionTarget)?.threadContexts ?? retained;
         if (records.length > 0) {
           store.addThreadContexts(draftTarget, records, { appendReference: false });
         }
       }
-      questionIdsByRequestKeyRef.current.delete(requestKey);
     },
     [pendingUserInputAnswersByRequestId, returnTextToComposerDraft],
   );
@@ -164,12 +166,6 @@ export function usePendingUserInputDraft({
   useLayoutEffect(() => {
     const nextRequestId = activePendingUserInput?.requestId ?? null;
     const previous = prevPendingUserInputRef.current;
-    if (activePendingUserInput) {
-      questionIdsByRequestKeyRef.current.set(
-        activePendingRequestKey,
-        activePendingUserInput.questions.map((question) => question.id),
-      );
-    }
     // A thread switch only hides the question, so it neither rescues nor
     // consumes the submitted mark; the real resolve may arrive after the user
     // returns and must still read as an answer, not a cancel.
@@ -192,6 +188,7 @@ export function usePendingUserInputDraft({
       ) {
         rescuePendingUserInputAnswers(previous.requestId, previous.draftTarget);
       }
+      snapshotsByRequestKeyRef.current.delete(previousKey);
     }
     // Runs after the rescue so text from a question replaced in the same
     // render follows the user into the new one.
@@ -239,13 +236,38 @@ export function usePendingUserInputDraft({
     prevPendingUserInputRef.current = nextRequestId
       ? { requestId: nextRequestId, draftTarget: composerDraftTarget }
       : null;
+    if (!activePendingUserInput) return;
+    const snapshot = snapshotsByRequestKeyRef.current.get(activePendingRequestKey) ?? {
+      answers: {},
+      threadContextsByDraft: new Map<DraftId, ReadonlyArray<ThreadContextRecord>>(),
+    };
+    snapshot.answers =
+      pendingUserInputAnswersByRequestId[activePendingRequestKey] ?? snapshot.answers;
+    const questionTargets = activePendingUserInput.questions.flatMap((question) => {
+      const target = resolveQuestionDraftTargetRef.current?.(
+        activePendingUserInput.requestId,
+        question.id,
+      );
+      return target ? [target] : [];
+    });
+    const captureThreadContexts = () => {
+      const store = useComposerDraftStore.getState();
+      for (const target of questionTargets) {
+        const draft = store.getComposerDraft(target);
+        if (draft) snapshot.threadContextsByDraft.set(target, draft.threadContexts);
+      }
+    };
+    captureThreadContexts();
+    snapshotsByRequestKeyRef.current.set(activePendingRequestKey, snapshot);
+    return useComposerDraftStore.subscribe(captureThreadContexts);
   }, [
     activePendingFirstQuestionId,
     activePendingFirstQuestionAllowsCustomAnswer,
     activePendingHasAnswerState,
     activePendingRequestKey,
-    activePendingUserInput?.requestId,
+    activePendingUserInput,
     composerDraftTarget,
+    pendingUserInputAnswersByRequestId,
     rescuePendingUserInputAnswers,
     setPendingUserInputAnswersByRequestId,
   ]);

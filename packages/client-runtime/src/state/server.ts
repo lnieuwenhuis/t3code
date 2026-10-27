@@ -830,7 +830,7 @@ export function createServerEnvironmentAtoms<R, E>(
     label: "environment-data:server:update-server",
     scheduler: updateScheduler,
     concurrency: configConcurrency,
-    execute: (target, atomRegistry) => {
+    execute: Effect.fn("ServerUpdate.updateServer")(function (target, atomRegistry) {
       const stateAtom = serverUpdateStateAtom(target.environmentId);
       let targetVersion = target.input.targetVersion;
       let fromVersion =
@@ -1045,7 +1045,7 @@ export function createServerEnvironmentAtoms<R, E>(
           }),
         ),
       );
-    },
+    }),
   });
   const settingsValueAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => get(configValueAtom(environmentId))?.settings ?? null).pipe(
@@ -1305,8 +1305,8 @@ export function createServerEnvironmentAtoms<R, E>(
     searchAcpRegistry: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:acp-registry:search",
       tag: WS_METHODS.serverSearchAcpRegistry,
-      staleTimeMs: 0,
-      idleTtlMs: 0,
+      // Reopening Add provider reuses recent results; submitting the same search refreshes it.
+      staleTimeMs: 5 * 60_000,
     }),
     configProjection,
     welcome,
