@@ -99,24 +99,25 @@ export function usePullRequestRefresh({
   const refreshFromHost = useCallback(async () => {
     const generation = ++refreshGeneration.current;
     setPendingScope(refreshScope);
-    try {
-      const result = await invalidate({ environmentId, input: { reference } });
-      if (activeRefreshScope.current !== refreshScope || generation !== refreshGeneration.current)
-        return;
-      if (result._tag === "Failure") {
-        toastManager.add({
-          type: "error",
-          title: "The pull request could not be refreshed",
-          description: readableFailure(squashAtomCommandFailure(result), "Try refreshing again."),
-        });
-        return;
-      }
-      refreshDetail();
-      setRefreshToken((token) => token + 1);
-    } finally {
-      if (activeRefreshScope.current === refreshScope && generation === refreshGeneration.current)
-        setPendingScope(null);
-    }
+    await invalidate({ environmentId, input: { reference } })
+      .then((result) => {
+        if (activeRefreshScope.current !== refreshScope || generation !== refreshGeneration.current)
+          return;
+        if (result._tag === "Failure") {
+          toastManager.add({
+            type: "error",
+            title: "The pull request could not be refreshed",
+            description: readableFailure(squashAtomCommandFailure(result), "Try refreshing again."),
+          });
+          return;
+        }
+        refreshDetail();
+        setRefreshToken((token) => token + 1);
+      })
+      .finally(() => {
+        if (activeRefreshScope.current === refreshScope && generation === refreshGeneration.current)
+          setPendingScope(null);
+      });
   }, [environmentId, invalidate, reference, refreshDetail, refreshScope]);
   // A refresh asked for by the page: the detail, and through the token below, the diff with it.
   const appliedForcedToken = useRef(forcedRefreshToken);

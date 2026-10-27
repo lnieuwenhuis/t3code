@@ -38,6 +38,8 @@ const target = new PrimaryConnectionTarget({
 const liveShell: EnvironmentShellState = {
   status: "live",
   error: Option.none(),
+  generation: 1,
+  removedAt: new Map(),
   snapshot: Option.some({
     schemaVersion: 2,
     snapshotSequence: 1,
@@ -101,7 +103,7 @@ function setup(
       ),
       networkStatus: yield* SubscriptionRef.make<NetworkStatus>("online"),
       start: Effect.void,
-      register: () => Effect.void,
+      register: () => Effect.succeed(true),
       registerPlatform: () => Effect.void,
       reconcilePlatform: () => Effect.void,
       remove: () => Effect.void,

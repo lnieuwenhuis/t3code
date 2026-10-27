@@ -1,6 +1,13 @@
 import { seedUserInputDraftAnswers } from "@t3tools/client-runtime/state/thread-requests";
 import type { ScopedThreadRef, ThreadContextRecord } from "@t3tools/contracts";
-import { useCallback, useLayoutEffect, useRef, type Dispatch, type SetStateAction } from "react";
+import {
+  useCallback,
+  useEffectEvent,
+  useLayoutEffect,
+  useRef,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import { useComposerDraftStore, type DraftId } from "../../composerDraftStore";
 import {
   setPendingUserInputCustomAnswer,
@@ -41,8 +48,9 @@ export function usePendingUserInputDraft({
   resolveQuestionDraftTarget?: (requestId: string, questionId: string) => DraftId | null;
 }) {
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
-  const resolveQuestionDraftTargetRef = useRef(resolveQuestionDraftTarget);
-  resolveQuestionDraftTargetRef.current = resolveQuestionDraftTarget;
+  const questionDraftTarget = useEffectEvent((requestId: string, questionId: string) =>
+    resolveQuestionDraftTarget?.(requestId, questionId),
+  );
   // Synchronized resolution prunes answer and attachment stores before React renders the transition.
   const snapshotsByRequestKeyRef = useRef(
     new Map<
@@ -214,10 +222,7 @@ export function usePendingUserInputDraft({
         // reads them from the question draft only.
         const store = useComposerDraftStore.getState();
         const records = store.getComposerDraft(composerDraftTarget)?.threadContexts ?? [];
-        const questionTarget = resolveQuestionDraftTargetRef.current?.(
-          nextRequestId,
-          activePendingFirstQuestionId,
-        );
+        const questionTarget = questionDraftTarget(nextRequestId, activePendingFirstQuestionId);
         if (records.length > 0 && questionTarget) {
           store.addThreadContexts(questionTarget, records, { appendReference: false });
         }
@@ -244,10 +249,7 @@ export function usePendingUserInputDraft({
     snapshot.answers =
       pendingUserInputAnswersByRequestId[activePendingRequestKey] ?? snapshot.answers;
     const questionTargets = activePendingUserInput.questions.flatMap((question) => {
-      const target = resolveQuestionDraftTargetRef.current?.(
-        activePendingUserInput.requestId,
-        question.id,
-      );
+      const target = questionDraftTarget(activePendingUserInput.requestId, question.id);
       return target ? [target] : [];
     });
     const captureThreadContexts = () => {

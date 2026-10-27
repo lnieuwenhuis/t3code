@@ -3346,9 +3346,11 @@ export const make = Effect.gen(function* () {
       ),
       Effect.uninterruptible,
     );
-    const read = rememberRevision
-      .pipe(Effect.andThen(Cache.get(diffCache, key)))
-      .pipe(Effect.ensuring(evictDiffs), Effect.ensuring(Effect.sync(armDiffSweep)));
+    const read = rememberRevision.pipe(
+      Effect.andThen(Cache.get(diffCache, key)),
+      Effect.ensuring(evictDiffs),
+      Effect.ensuring(Effect.sync(armDiffSweep)),
+    );
     return { key, read };
   };
   const diff: PullRequestService["Service"]["diff"] = (input) => {

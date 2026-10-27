@@ -1,5 +1,8 @@
 import * as NodeOS from "node:os";
-import { Effect, FileSystem, Path, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 
 const decodeSettings = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
@@ -27,12 +30,12 @@ export function extractClaudeRespectGitignore(value: unknown): boolean | undefin
   return getBooleanProperty(nestedSettings as Record<string, unknown>, "respectGitignore");
 }
 
-function readClaudeRespectGitignoreFromFile(settingsPath: string) {
-  return Effect.gen(function* () {
+const readClaudeRespectGitignoreFromFile = Effect.fn("readClaudeRespectGitignoreFromFile")(
+  function* (settingsPath: string) {
     const fileSystem = yield* FileSystem.FileSystem;
     const contents = yield* fileSystem
       .readFileString(settingsPath)
-      .pipe(Effect.catch(() => Effect.succeed(null)));
+      .pipe(Effect.orElseSucceed(() => null));
 
     if (contents === null) {
       return undefined;
@@ -42,29 +45,30 @@ function readClaudeRespectGitignoreFromFile(settingsPath: string) {
       Effect.map(extractClaudeRespectGitignore),
       Effect.orElseSucceed(() => undefined),
     );
-  });
-}
+  },
+);
 
-export function resolveClaudeRespectGitignore(cwd: string, options?: { homeDirectory?: string }) {
-  return Effect.gen(function* () {
-    const path = yield* Path.Path;
-    const homeDirectory =
-      options?.homeDirectory ?? process.env.HOME ?? process.env.USERPROFILE ?? NodeOS.homedir();
-    const candidatePaths = [
-      path.join(homeDirectory, ".claude.json"),
-      path.join(homeDirectory, ".claude", "settings.json"),
-      path.join(cwd, ".claude", "settings.json"),
-      path.join(cwd, ".claude", "settings.local.json"),
-    ];
+export const resolveClaudeRespectGitignore = Effect.fn("resolveClaudeRespectGitignore")(function* (
+  cwd: string,
+  options?: { homeDirectory?: string },
+) {
+  const path = yield* Path.Path;
+  const homeDirectory =
+    options?.homeDirectory ?? process.env.HOME ?? process.env.USERPROFILE ?? NodeOS.homedir();
+  const candidatePaths = [
+    path.join(homeDirectory, ".claude.json"),
+    path.join(homeDirectory, ".claude", "settings.json"),
+    path.join(cwd, ".claude", "settings.json"),
+    path.join(cwd, ".claude", "settings.local.json"),
+  ];
 
-    let respectGitignore = true;
-    for (const candidatePath of candidatePaths) {
-      const nextValue = yield* readClaudeRespectGitignoreFromFile(candidatePath);
-      if (nextValue !== undefined) {
-        respectGitignore = nextValue;
-      }
+  let respectGitignore = true;
+  for (const candidatePath of candidatePaths) {
+    const nextValue = yield* readClaudeRespectGitignoreFromFile(candidatePath);
+    if (nextValue !== undefined) {
+      respectGitignore = nextValue;
     }
+  }
 
-    return respectGitignore;
-  });
-}
+  return respectGitignore;
+});

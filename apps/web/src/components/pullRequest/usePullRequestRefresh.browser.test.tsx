@@ -11,7 +11,6 @@ vi.mock("~/state/pullRequests", () => ({ pullRequestEnvironment: { invalidate: {
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => invalidate }));
 vi.mock("../ui/toast", () => ({ toastManager: { add: notify } }));
 
-import { LIVE_REFRESH_INTERVAL_MS } from "~/hooks/useLiveRefresh";
 import { usePullRequestRefresh } from "./usePullRequestRefresh";
 
 type Props = Parameters<typeof usePullRequestRefresh>[0];
@@ -65,7 +64,7 @@ function invalidation() {
 }
 
 async function poll() {
-  await act(async () => vi.advanceTimersByTimeAsync(LIVE_REFRESH_INTERVAL_MS));
+  await act(async () => vi.advanceTimersByTimeAsync(5 * 60_000));
 }
 
 beforeEach(() => {
