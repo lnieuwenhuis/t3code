@@ -344,6 +344,7 @@ describe("AzureDevOpsCli.layer", () => {
           "json",
         ],
         cwd: "/repo",
+        notFoundDetail: "Pull request not found.",
         timeoutMs: 30_000,
       });
     }).pipe(Effect.provide(layer)),

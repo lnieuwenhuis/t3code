@@ -27,12 +27,14 @@ import { useStableCallback } from "../../hooks/useStableCallback";
 import { getUploadedAttachments, useAttachmentUploadStore } from "../../lib/attachmentUploadQueue";
 import {
   buildPendingUserInputAnswers,
-  derivePendingUserInputProgress,
-  projectPendingUserInputAnswer,
   setPendingUserInputCustomAnswer,
-  threadContextsReferencedByAnswer,
   togglePendingUserInputOptionSelection,
   type PendingUserInputDraftAnswer,
+} from "@t3tools/client-runtime/state/pending-user-input";
+import {
+  derivePendingUserInputProgress,
+  projectPendingUserInputAnswer,
+  threadContextsReferencedByAnswer,
 } from "../../pendingUserInput";
 import {
   questionAttachmentDraftId,
@@ -97,9 +99,9 @@ function makePendingCustomAnswerSetter(input: {
       [activePendingRequestKey]: {
         ...existing[activePendingRequestKey],
         [questionId]: setPendingUserInputCustomAnswer(
+          question,
           existing[activePendingRequestKey]?.[questionId],
           value,
-          question,
         ),
       },
     }));
@@ -490,6 +492,7 @@ export function usePendingThreadRequests(input: {
       }
       return;
     }
+    if (!activePendingProgress.canAdvance) return;
     setActivePendingUserInputQuestionIndex(activePendingProgress.questionIndex + 1);
   };
   const onAdvanceActivePendingUserInputStable = useStableCallback(onAdvanceActivePendingUserInput);

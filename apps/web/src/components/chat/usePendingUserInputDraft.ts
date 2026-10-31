@@ -1,18 +1,12 @@
 import { seedUserInputDraftAnswers } from "@t3tools/client-runtime/state/thread-requests";
 import type { ScopedThreadRef, ThreadContextRecord } from "@t3tools/contracts";
-import {
-  useCallback,
-  useEffectEvent,
-  useLayoutEffect,
-  useRef,
-  type Dispatch,
-  type SetStateAction,
-} from "react";
+import { useEffectEvent, useLayoutEffect, useRef, type Dispatch, type SetStateAction } from "react";
 import { useComposerDraftStore, type DraftId } from "../../composerDraftStore";
 import {
   setPendingUserInputCustomAnswer,
   type PendingUserInputDraftAnswer,
-} from "../../pendingUserInput";
+  type PendingUserInputQuestion,
+} from "@t3tools/client-runtime/state/pending-user-input";
 import {
   collectPendingUserInputCustomAnswers,
   type PendingUserInputRequestSnapshot,
@@ -36,11 +30,7 @@ export function usePendingUserInputDraft({
   composerDraftTarget: ScopedThreadRef | DraftId;
   activePendingUserInput: {
     requestId: string;
-    questions: ReadonlyArray<{
-      id: string;
-      allowCustomAnswer?: boolean | undefined;
-      initialAnswer?: string | undefined;
-    }>;
+    questions: ReadonlyArray<PendingUserInputQuestion>;
   } | null;
   pendingUserInputAnswersByRequestId: AnswersByRequest;
   setPendingUserInputAnswersByRequestId: Dispatch<SetStateAction<AnswersByRequest>>;
@@ -85,85 +75,84 @@ export function usePendingUserInputDraft({
   // the draft. Appends text that is leaving a request's answer slot unsent to
   // the thread's composer draft, replacing the persisted copy of text that
   // was carried in from the draft.
-  const returnTextToComposerDraft = useCallback(
-    (
-      requestId: string,
-      text: string,
-      draftTarget: ScopedThreadRef | DraftId,
-      discardEmptyCarriedDraft = false,
-    ) => {
-      const requestKey = pendingUserInputRequestKey(draftTarget, requestId);
-      // The request key already includes the draft owner; object identity changes on navigation.
-      const carried = carriedComposerDraftByRequestIdRef.current.get(requestKey);
-      const draftPrompt =
-        useComposerDraftStore.getState().getComposerDraft(draftTarget)?.prompt ?? "";
-      const nextDraftPrompt = resolveComposerDraftPromptAfterReturningPendingAnswer({
-        draftPrompt,
-        carriedDraftPrompt: carried?.text ?? null,
-        unrelatedDraftPrompt: carried?.unrelatedText ?? "",
-        pendingCustomAnswer: text,
-        discardEmptyCarriedDraft,
-      });
-      if (nextDraftPrompt === null) {
-        return;
-      }
-      carriedComposerDraftByRequestIdRef.current.delete(requestKey);
-      if (nextDraftPrompt !== draftPrompt) {
-        setComposerDraftPrompt(draftTarget, nextDraftPrompt);
-      }
-    },
-    [setComposerDraftPrompt],
-  );
+  const returnTextToComposerDraft = (
+    requestId: string,
+    text: string,
+    draftTarget: ScopedThreadRef | DraftId,
+    discardEmptyCarriedDraft = false,
+  ) => {
+    const requestKey = pendingUserInputRequestKey(draftTarget, requestId);
+    // The request key already includes the draft owner; object identity changes on navigation.
+    const carried = carriedComposerDraftByRequestIdRef.current.get(requestKey);
+    const draftPrompt =
+      useComposerDraftStore.getState().getComposerDraft(draftTarget)?.prompt ?? "";
+    const nextDraftPrompt = resolveComposerDraftPromptAfterReturningPendingAnswer({
+      draftPrompt,
+      carriedDraftPrompt: carried?.text ?? null,
+      unrelatedDraftPrompt: carried?.unrelatedText ?? "",
+      pendingCustomAnswer: text,
+      discardEmptyCarriedDraft,
+    });
+    if (nextDraftPrompt === null) {
+      return;
+    }
+    carriedComposerDraftByRequestIdRef.current.delete(requestKey);
+    if (nextDraftPrompt !== draftPrompt) {
+      setComposerDraftPrompt(draftTarget, nextDraftPrompt);
+    }
+  };
   // An option returns only one question's text. Move it into the unrelated
   // draft while retaining tracking for the other answers; the following answer
   // state update synchronizes their complete remaining set in the layout effect.
-  const returnQuestionTextToComposerDraft = useCallback(
-    (requestId: string, text: string, draftTarget: ScopedThreadRef | DraftId) => {
-      if (text.trim().length === 0) return;
-      const requestKey = pendingUserInputRequestKey(draftTarget, requestId);
-      const carried = carriedComposerDraftByRequestIdRef.current.get(requestKey);
-      const draftPrompt =
-        useComposerDraftStore.getState().getComposerDraft(draftTarget)?.prompt ?? "";
-      const unrelatedText =
-        carried && draftPrompt === carried.text ? carried.unrelatedText : draftPrompt;
-      carriedComposerDraftByRequestIdRef.current.set(requestKey, {
-        text: draftPrompt,
-        unrelatedText:
-          mergeComposerDraftPromptWithPendingAnswer(unrelatedText, text) ?? unrelatedText,
-      });
-    },
-    [],
-  );
+  const returnQuestionTextToComposerDraft = (
+    requestId: string,
+    text: string,
+    draftTarget: ScopedThreadRef | DraftId,
+  ) => {
+    if (text.trim().length === 0) return;
+    const requestKey = pendingUserInputRequestKey(draftTarget, requestId);
+    const carried = carriedComposerDraftByRequestIdRef.current.get(requestKey);
+    const draftPrompt =
+      useComposerDraftStore.getState().getComposerDraft(draftTarget)?.prompt ?? "";
+    const unrelatedText =
+      carried && draftPrompt === carried.text ? carried.unrelatedText : draftPrompt;
+    carriedComposerDraftByRequestIdRef.current.set(requestKey, {
+      text: draftPrompt,
+      unrelatedText:
+        mergeComposerDraftPromptWithPendingAnswer(unrelatedText, text) ?? unrelatedText,
+    });
+  };
   // The last committed answers remain available after synchronized draft cleanup.
-  const rescuePendingUserInputAnswers = useCallback(
-    (requestId: string, draftTarget: ScopedThreadRef | DraftId) => {
-      const requestKey = pendingUserInputRequestKey(draftTarget, requestId);
-      const snapshot = snapshotsByRequestKeyRef.current.get(requestKey);
-      const text = collectPendingUserInputCustomAnswers(
-        pendingUserInputAnswersByRequestId[requestKey] ?? snapshot?.answers,
-      );
-      if (text !== null) {
-        returnTextToComposerDraft(requestId, text, draftTarget);
+  const rescuePendingUserInputAnswers = (
+    requestId: string,
+    draftTarget: ScopedThreadRef | DraftId,
+  ) => {
+    const requestKey = pendingUserInputRequestKey(draftTarget, requestId);
+    const snapshot = snapshotsByRequestKeyRef.current.get(requestKey);
+    const text = collectPendingUserInputCustomAnswers(
+      pendingUserInputAnswersByRequestId[requestKey] ?? snapshot?.answers,
+    );
+    if (text !== null) {
+      returnTextToComposerDraft(requestId, text, draftTarget);
+    }
+    // Thread-reference records live in the question drafts, which are cleared
+    // once the request is gone; move them with the text they belong to.
+    const store = useComposerDraftStore.getState();
+    for (const [questionTarget, retained] of snapshot?.threadContextsByDraft ?? []) {
+      const records = store.getComposerDraft(questionTarget)?.threadContexts ?? retained;
+      if (records.length > 0) {
+        store.addThreadContexts(draftTarget, records, { appendReference: false });
       }
-      // Thread-reference records live in the question drafts, which are cleared
-      // once the request is gone; move them with the text they belong to.
-      const store = useComposerDraftStore.getState();
-      for (const [questionTarget, retained] of snapshot?.threadContextsByDraft ?? []) {
-        const records = store.getComposerDraft(questionTarget)?.threadContexts ?? retained;
-        if (records.length > 0) {
-          store.addThreadContexts(draftTarget, records, { appendReference: false });
-        }
-      }
-    },
-    [pendingUserInputAnswersByRequestId, returnTextToComposerDraft],
-  );
-  const activePendingFirstQuestionId = activePendingUserInput?.questions[0]?.id ?? null;
+    }
+  };
+  const activePendingFirstQuestion = activePendingUserInput?.questions[0] ?? null;
+  const activePendingFirstQuestionId = activePendingFirstQuestion?.id ?? null;
   const activePendingFirstQuestionAllowsCustomAnswer =
-    activePendingUserInput?.questions[0]?.allowCustomAnswer !== false;
+    activePendingFirstQuestion?.allowCustomAnswer !== false;
   const activePendingHasAnswerState =
     activePendingUserInput !== null &&
     pendingUserInputAnswersByRequestId[activePendingRequestKey] !== undefined;
-  // Moves composer text across the pending-question boundary (issue #8963).
+  // Moves composer text across the pending-question boundary.
   // A question that just appeared takes over the composer, so the draft is
   // carried into its first question's free-form answer and stays visible;
   // a question that disappears without being answered has its typed answers
@@ -171,6 +160,7 @@ export function usePendingUserInputDraft({
   // never paints a frame without the text. `prevPendingUserInputRef` is
   // written only here, so "previous" is always the state before this
   // transition.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- moves composer draft-store text across pending-question transitions before paint
   useLayoutEffect(() => {
     const nextRequestId = activePendingUserInput?.requestId ?? null;
     const previous = prevPendingUserInputRef.current;
@@ -202,6 +192,7 @@ export function usePendingUserInputDraft({
     // render follows the user into the new one.
     if (
       nextRequestId !== null &&
+      activePendingFirstQuestion !== null &&
       activePendingFirstQuestionId !== null &&
       (previous?.requestId !== nextRequestId ||
         pendingUserInputRequestKey(previous.draftTarget, null) !==
@@ -231,6 +222,7 @@ export function usePendingUserInputDraft({
           [activePendingRequestKey]: {
             ...existing[activePendingRequestKey],
             [activePendingFirstQuestionId]: setPendingUserInputCustomAnswer(
+              activePendingFirstQuestion,
               existing[activePendingRequestKey]?.[activePendingFirstQuestionId],
               draftToCarry,
             ),
@@ -263,6 +255,7 @@ export function usePendingUserInputDraft({
     snapshotsByRequestKeyRef.current.set(activePendingRequestKey, snapshot);
     return useComposerDraftStore.subscribe(captureThreadContexts);
   }, [
+    activePendingFirstQuestion,
     activePendingFirstQuestionId,
     activePendingFirstQuestionAllowsCustomAnswer,
     activePendingHasAnswerState,
@@ -274,6 +267,7 @@ export function usePendingUserInputDraft({
     setPendingUserInputAnswersByRequestId,
   ]);
   // Carry the user's unsent composer text first; provider initial answers only fill untouched slots.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- seeds provider initial answers once a request appears, after the composer carry
   useLayoutEffect(() => {
     if (!activePendingUserInput) return;
     setPendingUserInputAnswersByRequestId((existing) => {
@@ -285,6 +279,7 @@ export function usePendingUserInputDraft({
   // Persist the full current answer set after edits. A failed submission can
   // contain several answers, so clearing one must retain the others even if
   // this thread is hidden before the request disappears.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- persists the answer set into the composer draft store so it survives navigation
   useLayoutEffect(() => {
     const carried = carriedComposerDraftByRequestIdRef.current.get(activePendingRequestKey);
     const answers = pendingUserInputAnswersByRequestId[activePendingRequestKey];
@@ -313,53 +308,47 @@ export function usePendingUserInputDraft({
     pendingUserInputAnswersByRequestId,
     setComposerDraftPrompt,
   ]);
-  const beginSubmission = useCallback(
-    (requestId: string) => {
-      // Marked before the round trip: the resolved activity can arrive over the
-      // socket before this RPC settles, and the rescue effect must already know
-      // the question was answered rather than cancelled. Unmarked on failure so
-      // a later real Stop of the still-open question can rescue the text.
-      const requestKey = pendingUserInputRequestKey(composerDraftTarget, requestId);
-      submittedPendingUserInputRequestIdsRef.current.add(requestKey);
-      // The answer is what gets sent, so the persisted copy of text carried in
-      // from the draft goes now, before the resolve can bring the draft back
-      // on screen.
-      const carried = carriedComposerDraftByRequestIdRef.current.get(requestKey);
-      carriedComposerDraftByRequestIdRef.current.delete(requestKey);
-      const draftPrompt =
-        useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.prompt ?? "";
-      if (carried && draftPrompt === carried.text) {
-        setComposerDraftPrompt(composerDraftTarget, carried.unrelatedText);
+  const beginSubmission = (requestId: string) => {
+    // Marked before the round trip: the resolved activity can arrive over the
+    // socket before this RPC settles, and the rescue effect must already know
+    // the question was answered rather than cancelled. Unmarked on failure so
+    // a later real Stop of the still-open question can rescue the text.
+    const requestKey = pendingUserInputRequestKey(composerDraftTarget, requestId);
+    submittedPendingUserInputRequestIdsRef.current.add(requestKey);
+    // The answer is what gets sent, so the persisted copy of text carried in
+    // from the draft goes now, before the resolve can bring the draft back
+    // on screen.
+    const carried = carriedComposerDraftByRequestIdRef.current.get(requestKey);
+    carriedComposerDraftByRequestIdRef.current.delete(requestKey);
+    const draftPrompt =
+      useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.prompt ?? "";
+    if (carried && draftPrompt === carried.text) {
+      setComposerDraftPrompt(composerDraftTarget, carried.unrelatedText);
+    }
+    // Capture what was submitted, rather than the original composer carry.
+    // Failure may arrive while a different thread or environment is visible.
+    const submittedText = collectPendingUserInputCustomAnswers(
+      pendingUserInputAnswersByRequestId[requestKey],
+    );
+    return () => {
+      submittedPendingUserInputRequestIdsRef.current.delete(requestKey);
+      if (submittedText === null) {
+        return;
       }
-      // Capture what was submitted, rather than the original composer carry.
-      // Failure may arrive while a different thread or environment is visible.
-      const submittedText = collectPendingUserInputCustomAnswers(
-        pendingUserInputAnswersByRequestId[requestKey],
-      );
-      return () => {
-        submittedPendingUserInputRequestIdsRef.current.delete(requestKey);
-        if (submittedText === null) {
-          return;
-        }
-        const unrelatedText =
-          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.prompt ?? "";
-        const restoredText = mergeComposerDraftPromptWithPendingAnswer(
-          unrelatedText,
-          submittedText,
-        );
-        if (restoredText === null) {
-          return;
-        }
-        // Keep the unrelated draft separate so editing, erasing or retrying the
-        // answer replaces only its persisted copy, even after navigation.
-        carriedComposerDraftByRequestIdRef.current.set(requestKey, {
-          text: restoredText,
-          unrelatedText,
-        });
-        setComposerDraftPrompt(composerDraftTarget, restoredText);
-      };
-    },
-    [composerDraftTarget, pendingUserInputAnswersByRequestId, setComposerDraftPrompt],
-  );
+      const unrelatedText =
+        useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.prompt ?? "";
+      const restoredText = mergeComposerDraftPromptWithPendingAnswer(unrelatedText, submittedText);
+      if (restoredText === null) {
+        return;
+      }
+      // Keep the unrelated draft separate so editing, erasing or retrying the
+      // answer replaces only its persisted copy, even after navigation.
+      carriedComposerDraftByRequestIdRef.current.set(requestKey, {
+        text: restoredText,
+        unrelatedText,
+      });
+      setComposerDraftPrompt(composerDraftTarget, restoredText);
+    };
+  };
   return { returnQuestionTextToComposerDraft, beginSubmission };
 }

@@ -6,13 +6,6 @@ export interface ComposerPathSearchEntry {
   readonly parentPath?: string;
 }
 
-export interface ComposerPathSearchState {
-  readonly entries: ReadonlyArray<ComposerPathSearchEntry>;
-  readonly truncated: boolean;
-  readonly isPending: boolean;
-  readonly error: string | null;
-}
-
 export interface ComposerPathSearchTarget {
   readonly environmentId: EnvironmentId | null;
   readonly cwd: string | null;

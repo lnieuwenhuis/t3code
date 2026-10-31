@@ -673,19 +673,25 @@ export const make = Effect.gen(function* () {
   const projectSettingsFor = Effect.fnUntraced(function* (input: {
     readonly cwd: string;
     readonly threadId?: ThreadId | undefined;
+    readonly projectId?: ProjectId | undefined;
   }) {
     const settings = yield* serverSettingsService.getSettings;
     if (!hasProjectSettingsOverrides(settings))
       return { settings, projectId: null as ProjectId | null };
-    const projectId: ProjectId | null = yield* input.threadId !== undefined
-      ? threads.getThreadShell(input.threadId).pipe(
-          Effect.map((thread) => thread?.projectId ?? null),
-          Effect.orElseSucceed(() => null),
-        )
-      : projects.findActiveByWorkspaceRoot(input.cwd).pipe(
-          Effect.map((project) => Option.getOrNull(project)?.projectId ?? null),
-          Effect.orElseSucceed(() => null),
-        );
+    const threadProjectId =
+      input.threadId === undefined
+        ? null
+        : yield* threads.getThreadShell(input.threadId).pipe(
+            Effect.map((thread) => thread?.projectId ?? null),
+            Effect.orElseSucceed(() => null),
+          );
+    const projectId =
+      threadProjectId ??
+      input.projectId ??
+      (yield* projects.findActiveByWorkspaceRoot(input.cwd).pipe(
+        Effect.map((project) => Option.getOrNull(project)?.projectId ?? null),
+        Effect.orElseSucceed(() => null),
+      ));
     return { settings: resolveProjectSettings(settings, projectId).settings, projectId };
   });
   const readThreadContext = Effect.fnUntraced(
@@ -2851,11 +2857,9 @@ export const make = Effect.gen(function* () {
           pullRequestHeadRef === null
             ? headCommitFromUpstream
             : gitCore
-                // The pull request's own ref, because it is the only thing that certainly names
-                // its head. The branch's upstream does not: configuring it is best-effort, so a
-                // branch cut from `origin/main` whose head branch has since been deleted still
-                // resolves — and following it would move the checkout onto main and call that
-                // the pull request.
+                // Only the pull request's own ref certainly names its head. A best-effort branch
+                // upstream can still resolve to `origin/main` after the head branch is deleted,
+                // which would move the checkout onto main and call that the pull request.
                 .fetchRefCommit({ cwd: worktreePath, ref: pullRequestHeadRef })
                 .pipe(Effect.catch(() => headCommitFromUpstream))
         ).pipe(

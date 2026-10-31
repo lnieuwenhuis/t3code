@@ -5,16 +5,16 @@ import {
   onThreadRequestsResolved,
   pruneResolvedUserInputDrafts,
 } from "@t3tools/client-runtime/state/thread-requests";
-import { act, useLayoutEffect, useMemo, useState } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { useLayoutEffect, useState } from "react";
+import { describe, expect, it } from "vite-plus/test";
+import { act, render, type Screen } from "../../../test/render";
 import { useComposerDraftStore } from "../../composerDraftStore";
-import { threadContextRecord } from "../../lib/composerContextRecords";
+import { threadContextRecord } from "@t3tools/shared/composerContextReferences";
 import { questionAttachmentDraftId } from "../../questionAttachments";
 import {
   setPendingUserInputCustomAnswer,
   type PendingUserInputDraftAnswer,
-} from "../../pendingUserInput";
+} from "@t3tools/client-runtime/state/pending-user-input";
 import { pendingUserInputRequestKey } from "../ChatView.logic";
 import { usePendingUserInputDraft } from "./usePendingUserInputDraft";
 
@@ -22,9 +22,14 @@ const environmentId = EnvironmentId.make("environment-a");
 const otherEnvironmentId = EnvironmentId.make("environment-b");
 const threadA = ThreadId.make("thread-a");
 const threadB = ThreadId.make("thread-b");
-const request = { requestId: "request", questions: [{ id: "question" }, { id: "question-two" }] };
+const request = {
+  requestId: "request",
+  questions: [
+    { id: "question", options: [] },
+    { id: "question-two", options: [] },
+  ],
+};
 const ownerA = scopeThreadRef(environmentId, threadA);
-let renderer: Root;
 let composer: {
   target: ScopedThreadRef;
   answer: string;
@@ -34,7 +39,7 @@ let composer: {
 };
 
 // Like the unkeyed server route, navigation changes props on the same mounted
-// composer. useMemo allocates a new scoped reference when returning to A.
+// composer, which allocates a new scoped reference when returning to A.
 function Composer({
   threadId,
   environment = environmentId,
@@ -46,7 +51,7 @@ function Composer({
   pending: boolean;
   initialAnswer?: string;
 }) {
-  const target = useMemo(() => scopeThreadRef(environment, threadId), [environment, threadId]);
+  const target = scopeThreadRef(environment, threadId);
   const [answers, setAnswers] = useState<
     Record<string, Record<string, PendingUserInputDraftAnswer>>
   >({});
@@ -85,7 +90,11 @@ function Composer({
           ...existing,
           [key]: {
             ...existing[key],
-            [questionId]: setPendingUserInputCustomAnswer(existing[key]?.[questionId], value),
+            [questionId]: setPendingUserInputCustomAnswer(
+              { id: questionId, options: [] },
+              existing[key]?.[questionId],
+              value,
+            ),
           },
         }));
       },
@@ -115,30 +124,30 @@ function Composer({
   });
   return null;
 }
-async function navigate(threadId: ThreadId, pending: boolean, environment = environmentId) {
-  await act(() =>
-    renderer.render(<Composer threadId={threadId} pending={pending} environment={environment} />),
+async function navigate(
+  screen: Screen,
+  threadId: ThreadId,
+  pending: boolean,
+  environment = environmentId,
+) {
+  await screen.rerender(
+    <Composer threadId={threadId} pending={pending} environment={environment} />,
   );
 }
 function prompt(target = ownerA) {
   return useComposerDraftStore.getState().getComposerDraft(target)?.prompt ?? "";
 }
-beforeEach(async () => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+// Mounts thread A with its draft, then shows A's pending question.
+async function setup() {
   useComposerDraftStore.setState({ draftsByThreadKey: {} });
   useComposerDraftStore.getState().setPrompt(ownerA, "original draft");
-  await act(() => {
-    renderer = createRoot(document.createElement("div"));
-    renderer.render(<Composer threadId={threadA} pending={false} />);
+  const screen = await render(<Composer threadId={threadA} pending={false} />, {
+    router: false, // no routes involved
   });
-  await navigate(threadA, true);
+  await navigate(screen, threadA, true);
   expect(composer.answer).toBe("original draft");
-});
-afterEach(async () => {
-  await act(() => renderer.unmount());
-  useComposerDraftStore.setState({ draftsByThreadKey: {} });
-  vi.unstubAllGlobals();
-});
+  return screen;
+}
 const attachedThread = threadContextRecord(
   scopeThreadRef(environmentId, ThreadId.make("attached-thread")),
   "Fix login flow",
@@ -151,6 +160,7 @@ function contexts(target: ScopedThreadRef | ReturnType<typeof questionDraftTarge
 }
 describe("pending answer draft ownership through mounted navigation", () => {
   it("rescues unsent text and thread references after synchronized request cleanup", async () => {
+    await using screen = await setup();
     await act(() => composer.edit("unsent answer"));
     await act(() =>
       useComposerDraftStore
@@ -158,9 +168,9 @@ describe("pending answer draft ownership through mounted navigation", () => {
         .addThreadContexts(questionDraftTarget(), [attachedThread], { appendReference: false }),
     );
     const announce = makeThreadRequestsResolvedAnnouncer(environmentId, threadA);
-    await act(() => {
+    await act(async () => {
       announce([]);
-      renderer.render(<Composer threadId={threadA} pending={false} />);
+      await screen.rerender(<Composer threadId={threadA} pending={false} />);
     });
     expect(prompt()).toBe("unsent answer");
     expect(contexts(ownerA)).toEqual([attachedThread]);
@@ -168,25 +178,28 @@ describe("pending answer draft ownership through mounted navigation", () => {
   });
 
   it("does not rescue submitted text after synchronized request cleanup", async () => {
+    await using screen = await setup();
     await act(() => composer.edit("submitted answer"));
     await act(() => composer.submit(Promise.resolve()));
     const announce = makeThreadRequestsResolvedAnnouncer(environmentId, threadA);
-    await act(() => {
+    await act(async () => {
       announce([]);
-      renderer.render(<Composer threadId={threadA} pending={false} />);
+      await screen.rerender(<Composer threadId={threadA} pending={false} />);
     });
     expect(prompt()).toBe("");
   });
 
   it("carries thread-reference records into the question draft with the text", async () => {
+    await using screen = await setup();
     const ownerB = scopeThreadRef(environmentId, threadB);
     useComposerDraftStore.getState().setPrompt(ownerB, "draft with chip");
     useComposerDraftStore.getState().addThreadContexts(ownerB, [attachedThread]);
-    await navigate(threadB, true);
+    await navigate(screen, threadB, true);
     expect(composer.answer).toContain("draft with chip");
     expect(contexts(questionDraftTarget("question", threadB))).toEqual([attachedThread]);
   });
   it("returns question thread-reference records to the composer when dismissed", async () => {
+    await using screen = await setup();
     await act(() =>
       useComposerDraftStore
         .getState()
@@ -195,56 +208,56 @@ describe("pending answer draft ownership through mounted navigation", () => {
         }),
     );
     expect(contexts(ownerA)).toEqual([]);
-    await navigate(threadA, false);
+    await navigate(screen, threadA, false);
     expect(contexts(ownerA)).toEqual([attachedThread]);
   });
   it("seeds provider answers without overwriting carried drafts or cleared edits", async () => {
+    await using screen = await setup();
     useComposerDraftStore
       .getState()
       .setPrompt(scopeThreadRef(environmentId, threadB), "unsent B draft");
-    await act(() =>
-      renderer.render(<Composer threadId={threadB} pending initialAnswer="provider seed" />),
-    );
+    await screen.rerender(<Composer threadId={threadB} pending initialAnswer="provider seed" />);
     expect(composer.answer).toBe("unsent B draft");
     await act(() => composer.edit(""));
-    await act(() =>
-      renderer.render(<Composer threadId={threadB} pending initialAnswer="changed seed" />),
-    );
+    await screen.rerender(<Composer threadId={threadB} pending initialAnswer="changed seed" />);
     expect(composer.answer).toBe("");
   });
   it("uses the provider initial answer when the composer has no draft", async () => {
-    await act(() =>
-      renderer.render(<Composer threadId={threadB} pending initialAnswer="provider seed" />),
-    );
+    await using screen = await setup();
+    await screen.rerender(<Composer threadId={threadB} pending initialAnswer="provider seed" />);
     expect(composer.answer).toBe("provider seed");
-    await navigate(threadB, false);
+    await navigate(screen, threadB, false);
     expect(prompt(scopeThreadRef(environmentId, threadB))).toBe("provider seed\n\nprovider seed");
   });
   it("returns every typed answer to the draft when an async question is dismissed", async () => {
+    await using screen = await setup();
     await act(() => composer.edit("first unsent answer"));
     await act(() => composer.edit("second unsent answer", "question-two"));
     // V2 dismissal removes the request without submitting its answers.
-    await navigate(threadA, false);
+    await navigate(screen, threadA, false);
     expect(prompt()).toBe("first unsent answer\n\nsecond unsent answer");
   });
   it("does not resurrect an erased carried answer after A to B to A and Stop", async () => {
+    await using screen = await setup();
     const initialTarget = composer.target;
-    await navigate(threadB, false);
-    await navigate(threadA, true);
+    await navigate(screen, threadB, false);
+    await navigate(screen, threadA, true);
     expect(composer.target).toEqual(initialTarget);
     expect(composer.target).not.toBe(initialTarget);
     await act(() => composer.edit(""));
-    await navigate(threadA, false);
+    await navigate(screen, threadA, false);
     expect(prompt()).toBe("");
   });
   it("replaces the persisted carried copy with the edited answer after returning and Stop", async () => {
-    await navigate(threadB, false);
-    await navigate(threadA, true);
+    await using screen = await setup();
+    await navigate(screen, threadB, false);
+    await navigate(screen, threadA, true);
     await act(() => composer.edit("edited answer"));
-    await navigate(threadA, false);
+    await navigate(screen, threadA, false);
     expect(prompt()).toBe("edited answer");
   });
   it("rescues a failed response when A is revisited after the question disappeared", async () => {
+    await using screen = await setup();
     await act(() => composer.edit("edited answer"));
     let rejectResponse!: (error: Error) => void;
     const response = new Promise<void>((_resolve, reject) => {
@@ -255,8 +268,8 @@ describe("pending answer draft ownership through mounted navigation", () => {
       submission = composer.submit(response);
     });
     expect(prompt()).toBe("");
-    await navigate(threadB, false);
-    await navigate(threadA, false);
+    await navigate(screen, threadB, false);
+    await navigate(screen, threadA, false);
     await act(async () => {
       rejectResponse(new Error("response failed"));
       await submission;
@@ -264,6 +277,7 @@ describe("pending answer draft ownership through mounted navigation", () => {
     expect(prompt()).toBe("edited answer");
   });
   it("does not rescue a failed response into an identically named thread in another environment", async () => {
+    await using screen = await setup();
     await act(() => composer.edit("edited answer"));
     let rejectResponse!: (error: Error) => void;
     const response = new Promise<void>((_resolve, reject) => {
@@ -275,21 +289,22 @@ describe("pending answer draft ownership through mounted navigation", () => {
     });
     const otherOwner = scopeThreadRef(otherEnvironmentId, threadA);
     useComposerDraftStore.getState().setPrompt(otherOwner, "other draft");
-    await navigate(threadA, false, otherEnvironmentId);
+    await navigate(screen, threadA, false, otherEnvironmentId);
     await act(async () => {
       rejectResponse(new Error("response failed"));
       await submission;
     });
     expect(prompt(otherOwner)).toBe("other draft");
     expect(prompt()).toBe("edited answer");
-    await navigate(threadA, true);
-    await navigate(threadA, false);
+    await navigate(screen, threadA, true);
+    await navigate(screen, threadA, false);
     expect(prompt()).toBe("edited answer");
   });
 
   it.each(["disappear", "edit", "erase", "retry"])(
     "persists an offscreen failed answer and preserves unrelated text on %s",
     async (nextAction) => {
+      await using screen = await setup();
       await act(() => composer.edit("edited answer"));
       let rejectResponse!: (error: Error) => void;
       const response = new Promise<void>((_resolve, reject) => {
@@ -299,7 +314,7 @@ describe("pending answer draft ownership through mounted navigation", () => {
       await act(() => {
         submission = composer.submit(response);
       });
-      await navigate(threadB, false);
+      await navigate(screen, threadB, false);
       useComposerDraftStore.getState().setPrompt(ownerA, "unrelated draft");
       await act(async () => {
         rejectResponse(new Error("response failed"));
@@ -307,17 +322,17 @@ describe("pending answer draft ownership through mounted navigation", () => {
       });
       expect(prompt()).toBe("unrelated draft\n\nedited answer");
       if (nextAction === "disappear") {
-        await navigate(threadA, false);
+        await navigate(screen, threadA, false);
         expect(prompt()).toBe("unrelated draft\n\nedited answer");
         return;
       }
-      await navigate(threadA, true);
+      await navigate(screen, threadA, true);
       if (nextAction === "retry") {
         await act(() => composer.submit(Promise.resolve()));
       } else {
         await act(() => composer.edit(nextAction === "erase" ? "" : "new answer"));
       }
-      await navigate(threadA, false);
+      await navigate(screen, threadA, false);
       expect(prompt()).toBe(
         nextAction === "edit" ? "unrelated draft\n\nnew answer" : "unrelated draft",
       );
@@ -327,13 +342,14 @@ describe("pending answer draft ownership through mounted navigation", () => {
   it.each(["question", "question-two"])(
     "preserves the other failed answer after erasing %s and an offscreen cancellation",
     async (questionId) => {
+      await using screen = await setup();
       await act(() => composer.edit("answer one"));
       await act(() => composer.edit("answer two", "question-two"));
       await act(() => composer.submit(Promise.reject(new Error("response failed"))));
       expect(prompt()).toBe("answer one\n\nanswer two");
       await act(() => composer.edit("", questionId));
-      await navigate(threadB, false);
-      await navigate(threadA, false);
+      await navigate(screen, threadB, false);
+      await navigate(screen, threadA, false);
       expect(prompt()).toBe(questionId === "question" ? "answer two" : "answer one");
     },
   );
@@ -341,15 +357,16 @@ describe("pending answer draft ownership through mounted navigation", () => {
   it.each(["disappear", "edit", "erase", "retry"])(
     "retains other answers and unrelated text after choosing an option then %s",
     async (nextAction) => {
+      await using screen = await setup();
       await act(() => composer.edit("answer one"));
       await act(() => composer.edit("answer two", "question-two"));
       useComposerDraftStore.getState().setPrompt(ownerA, "unrelated draft");
       await act(() => composer.submit(Promise.reject(new Error("response failed"))));
       await act(() => composer.selectOption("question"));
       expect(prompt()).toBe("unrelated draft\n\nanswer one\n\nanswer two");
-      await navigate(threadB, false);
+      await navigate(screen, threadB, false);
       if (nextAction !== "disappear") {
-        await navigate(threadA, true);
+        await navigate(screen, threadA, true);
         if (nextAction === "retry") {
           await act(() => composer.submit(Promise.resolve()));
         } else {
@@ -357,9 +374,9 @@ describe("pending answer draft ownership through mounted navigation", () => {
             composer.edit(nextAction === "edit" ? "updated answer two" : "", "question-two"),
           );
         }
-        await navigate(threadB, false);
+        await navigate(screen, threadB, false);
       }
-      await navigate(threadA, false);
+      await navigate(screen, threadA, false);
       expect(prompt()).toBe(
         "unrelated draft\n\nanswer one" +
           (nextAction === "disappear"
@@ -372,6 +389,7 @@ describe("pending answer draft ownership through mounted navigation", () => {
   );
 
   it("does not rescue a submitted answer when returning before its resolution", async () => {
+    await using screen = await setup();
     let resolveResponse!: () => void;
     const response = new Promise<void>((resolve) => {
       resolveResponse = resolve;
@@ -380,9 +398,9 @@ describe("pending answer draft ownership through mounted navigation", () => {
     await act(() => {
       submission = composer.submit(response);
     });
-    await navigate(threadB, false);
-    await navigate(threadA, true);
-    await navigate(threadA, false);
+    await navigate(screen, threadB, false);
+    await navigate(screen, threadA, true);
+    await navigate(screen, threadA, false);
     await act(async () => {
       resolveResponse();
       await submission;
@@ -390,15 +408,16 @@ describe("pending answer draft ownership through mounted navigation", () => {
     expect(prompt()).toBe("");
   });
   it("keeps reused thread and request ids in another environment independent", async () => {
+    await using screen = await setup();
     const otherOwner = scopeThreadRef(otherEnvironmentId, threadA);
     useComposerDraftStore.getState().setPrompt(otherOwner, "other draft");
-    await navigate(threadA, true, otherEnvironmentId);
+    await navigate(screen, threadA, true, otherEnvironmentId);
     expect(composer.answer).toBe("other draft");
     await act(() => composer.edit("other answer"));
-    await navigate(threadA, false, otherEnvironmentId);
+    await navigate(screen, threadA, false, otherEnvironmentId);
     expect(prompt(otherOwner)).toBe("other answer");
     expect(prompt()).toBe("original draft");
-    await navigate(threadA, true);
+    await navigate(screen, threadA, true);
     expect(composer.answer).toBe("original draft");
   });
 });

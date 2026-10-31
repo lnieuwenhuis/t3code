@@ -77,6 +77,7 @@ function setup(
       initialConfig: Effect.succeed(config),
       ready: Effect.void,
       probe: Effect.sync(() => probe()),
+      inboundFrames: Effect.succeed(0),
       closed: Effect.never,
       subscribeServerConfig: () => Stream.empty,
     };
@@ -104,7 +105,7 @@ function setup(
       networkStatus: yield* SubscriptionRef.make<NetworkStatus>("online"),
       start: Effect.void,
       register: () => Effect.succeed(true),
-      registerPlatform: () => Effect.void,
+      assertKnownAddress: () => Effect.die("Unexpected address check"),
       reconcilePlatform: () => Effect.void,
       remove: () => Effect.void,
       removeRoute: () => Effect.void,
