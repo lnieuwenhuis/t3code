@@ -74,6 +74,22 @@ export const resolveCodexHomeLayout = Effect.fn("resolveCodexHomeLayout")(functi
   };
 });
 
+// Codex accepts bundled plugins only from this path under CODEX_HOME. The shared
+// config names the original home, so shadow homes must override it through their .tmp link.
+const BUNDLED_MARKETPLACE = "openai-bundled";
+
+const quoteCliArg = (value: string) => `"${value.replace(/["\\$`]/g, "\\$&")}"`;
+
+export function codexHomeLaunchArgs(path: Path.Path, layout: CodexHomeLayout, launchArgs: string) {
+  const homePath = layout.effectiveHomePath;
+  if (layout.mode !== "authOverlay" || homePath === undefined) return launchArgs;
+  const source = path.join(homePath, ".tmp", "bundled-marketplaces", BUNDLED_MARKETPLACE);
+  const setting = `marketplaces.${BUNDLED_MARKETPLACE}.source=${JSON.stringify(source)}`;
+  const override = `-c ${quoteCliArg(setting)}`;
+  // User launch args come last so an explicit source still wins.
+  return launchArgs.length > 0 ? `${override} ${launchArgs}` : override;
+}
+
 const CodexShadowHomeContext = {
   sharedHomePath: Schema.String,
   effectiveHomePath: Schema.String,
@@ -236,28 +252,28 @@ const ensureSymlink = Effect.fn("CodexHomeLayout.ensureSymlink")(function* (inpu
     linkPath: link,
   });
 
+  const symlinkError = (cause: unknown) =>
+    new CodexShadowHomeFileSystemError({
+      sharedHomePath: input.sharedHomePath,
+      effectiveHomePath: input.effectiveHomePath,
+      operation: "symlink",
+      path: link,
+      targetPath: target,
+      entryName: input.entryName,
+      cause,
+    });
   const createLink = Effect.gen(function* () {
     if (yield* HostProcess.isWindows) {
       const info = yield* input.fileSystem.stat(target);
       if (info.type === "Directory") {
-        return yield* Effect.tryPromise(() => NodeFSP.symlink(target, link, "junction"));
+        return yield* Effect.tryPromise({
+          try: () => NodeFSP.symlink(target, link, "junction"),
+          catch: symlinkError,
+        });
       }
     }
     yield* input.fileSystem.symlink(target, link);
-  }).pipe(
-    Effect.mapError(
-      (cause) =>
-        new CodexShadowHomeFileSystemError({
-          sharedHomePath: input.sharedHomePath,
-          effectiveHomePath: input.effectiveHomePath,
-          operation: "symlink",
-          path: link,
-          targetPath: target,
-          entryName: input.entryName,
-          cause,
-        }),
-    ),
-  );
+  }).pipe(Effect.catchTags({ PlatformError: symlinkError }));
 
   if (state._tag === "NotSymlink") {
     if (!REPLACEABLE_SHARED_RUNTIME_ENTRIES.has(input.entryName)) {

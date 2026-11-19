@@ -12,6 +12,7 @@ const legacyTable =
 const legacyReaders = ["orchestration-v2/legacy/", "persistence/Migrations/"] as const;
 const legacyReaderFiles: Record<string, string> = {
   "serverSettings.ts": "one-time provider history for settings migration",
+  "persistence/DatabaseMaintenance.ts": "checks for unimported records before deleting V1 data",
   // Verifies this fork's V1 index and table schemas on the private snapshot before V2 publishes it.
   "persistence/reconcileForkV1Snapshot.ts": "fork V1 snapshot schema check before V2 publish",
 };
@@ -50,7 +51,7 @@ it("keeps the V1 agent runtime and engine deleted", () => {
   assert.deepEqual(violations, []);
 });
 
-it("reads the V1 tables only from the legacy importer", () => {
+it("limits V1 table reads to import, migration, and database maintenance", () => {
   const readers = relativeSources
     .filter(({ source }) => legacyTable.test(source))
     .map(({ path }) => path)

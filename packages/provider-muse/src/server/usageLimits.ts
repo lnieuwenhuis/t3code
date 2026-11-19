@@ -1,40 +1,38 @@
-import type { ProviderUsageLimitsUpdate } from "@t3tools/contracts";
-import { makeUnavailableUsageLimits } from "@t3tools/provider-core/server/usageLimits";
+import type { ProviderUsageLimitsReport } from "@t3tools/provider-core/server/snapshot";
+import {
+  clampPercent,
+  makeUnavailableUsageLimits,
+} from "@t3tools/provider-core/server/usageLimits";
 import * as DateTime from "effect/DateTime";
 
 import { LATEST_DATE_MS, type MuseSubscriptionUsage } from "./protocol.ts";
 
-const WEEK_MINS = 7 * 24 * 60;
+const isoMillis = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
 
-const isoFromMillis = (millis: number) => DateTime.formatIso(DateTime.makeUnsafe(millis));
-
-/**
- * Muse's rolling window (5 hours today) and weekly block as limit windows.
- * Percentages are verbatim from Meta and may exceed 100; the shared merge clamps them.
- */
-export function museUsageToUpdate(
-  usage: MuseSubscriptionUsage,
-): ProviderUsageLimitsUpdate & { readonly checkedAt: string } {
+/** Muse's account-wide report as Limits windows, with its tier as the plan. */
+export function museUsageToLimits(usage: MuseSubscriptionUsage): ProviderUsageLimitsReport {
+  const tier = usage.tier.trim();
   return {
-    checkedAt: isoFromMillis(usage.observedAtMs),
+    checkedAt: isoMillis(usage.observedAtMs),
     windows: [
       {
-        id: "window",
+        id: "session",
         kind: "session",
         label: "Session",
-        usedPercent: usage.window.usedPercent,
-        resetsAt: isoFromMillis(usage.window.resetsAtMs),
+        usedPercent: clampPercent(usage.window.usedPercent),
+        resetsAt: isoMillis(usage.window.resetsAtMs),
         windowDurationMins: usage.window.windowDurationMins,
       },
       {
         id: "weekly",
         kind: "weekly",
         label: "Weekly",
-        usedPercent: usage.weekly.usedPercent,
-        resetsAt: isoFromMillis(usage.weekly.resetsAtMs),
-        windowDurationMins: WEEK_MINS,
+        usedPercent: clampPercent(usage.weekly.usedPercent),
+        resetsAt: isoMillis(usage.weekly.resetsAtMs),
+        windowDurationMins: 7 * 24 * 60,
       },
     ],
+    ...(tier ? { authLabel: tier } : {}),
   };
 }
 
@@ -51,12 +49,7 @@ export const museUsageLimitsBeforeTurn = (checkedAt: string) =>
     message: "Muse Code reports its limits during a turn. Send it a message to see them.",
   });
 
-/**
- * Muse surfaces Meta's quota refusal as `API error 429: Subscription quota
- * exhausted. Your usage window resets at 2026-10-13T10:45:52Z.`, at times
- * wrapped by a credential proxy. Muse can also type the stop as `error.quota`,
- * but a relayed refusal arrives untyped, so the text still counts.
- */
+/** Credential proxies may omit error.quota from 429 refusals; inspect text too. */
 export function isMuseUsageLimitFailure(message: string | undefined): boolean {
   return message !== undefined && /\b429\b/.test(message) && /quota|usage limit/i.test(message);
 }
@@ -84,5 +77,5 @@ export function museUsageLimitResetAt(
     (ms): ms is number =>
       ms !== undefined && Number.isFinite(ms) && ms > nowMs && ms <= LATEST_DATE_MS,
   );
-  return resets.length > 0 ? DateTime.formatIso(DateTime.makeUnsafe(Math.max(...resets))) : null;
+  return resets.length > 0 ? isoMillis(Math.max(...resets)) : null;
 }

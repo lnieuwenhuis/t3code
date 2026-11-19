@@ -7,6 +7,7 @@ import {
 } from "@t3tools/client-runtime/state/thread-requests";
 import { useLayoutEffect, useState } from "react";
 import { describe, expect, it } from "vite-plus/test";
+import { createStore } from "zustand/vanilla";
 import { act, render, type Screen } from "../../../test/render";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { threadContextRecord } from "@t3tools/shared/composerContextReferences";
@@ -52,17 +53,19 @@ function Composer({
   initialAnswer?: string;
 }) {
   const target = scopeThreadRef(environment, threadId);
-  const [answers, setAnswers] = useState<
-    Record<string, Record<string, PendingUserInputDraftAnswer>>
-  >({});
+  const [answersStore] = useState(() =>
+    createStore<Record<string, Record<string, PendingUserInputDraftAnswer>>>(() => ({})),
+  );
   useLayoutEffect(
     () =>
       onThreadRequestsResolved(({ environmentId, threadId, pendingRequestIds }) =>
-        setAnswers((existing) =>
-          pruneResolvedUserInputDrafts(existing, environmentId, threadId, pendingRequestIds),
+        answersStore.setState(
+          (existing) =>
+            pruneResolvedUserInputDrafts(existing, environmentId, threadId, pendingRequestIds),
+          true,
         ),
       ),
-    [],
+    [answersStore],
   );
   const lifecycle = usePendingUserInputDraft({
     composerDraftTarget: target,
@@ -75,8 +78,7 @@ function Composer({
           })),
         }
       : null,
-    pendingUserInputAnswersByRequestId: answers,
-    setPendingUserInputAnswersByRequestId: setAnswers,
+    answersStore,
     resolveQuestionDraftTarget: (requestId, questionId) =>
       questionAttachmentDraftId(environment, threadId, requestId, questionId),
   });
@@ -84,9 +86,11 @@ function Composer({
   useLayoutEffect(() => {
     composer = {
       target,
-      answer: answers[key]?.question?.customAnswer ?? "",
+      get answer() {
+        return answersStore.getState()[key]?.question?.customAnswer ?? "";
+      },
       edit(value, questionId = "question") {
-        setAnswers((existing) => ({
+        answersStore.setState((existing) => ({
           ...existing,
           [key]: {
             ...existing[key],
@@ -101,10 +105,10 @@ function Composer({
       selectOption(questionId) {
         lifecycle.returnQuestionTextToComposerDraft(
           request.requestId,
-          answers[key]?.[questionId]?.customAnswer ?? "",
+          answersStore.getState()[key]?.[questionId]?.customAnswer ?? "",
           target,
         );
-        setAnswers((existing) => ({
+        answersStore.setState((existing) => ({
           ...existing,
           [key]: {
             ...existing[key],
@@ -253,6 +257,7 @@ describe("pending answer draft ownership through mounted navigation", () => {
     await navigate(screen, threadB, false);
     await navigate(screen, threadA, true);
     await act(() => composer.edit("edited answer"));
+    expect(prompt()).toBe("edited answer");
     await navigate(screen, threadA, false);
     expect(prompt()).toBe("edited answer");
   });

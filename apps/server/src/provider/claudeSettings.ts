@@ -1,4 +1,4 @@
-import * as NodeOS from "node:os";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -53,8 +53,12 @@ export const resolveClaudeRespectGitignore = Effect.fn("resolveClaudeRespectGiti
   options?: { homeDirectory?: string },
 ) {
   const path = yield* Path.Path;
+  const environment = yield* HostProcess.Environment;
   const homeDirectory =
-    options?.homeDirectory ?? process.env.HOME ?? process.env.USERPROFILE ?? NodeOS.homedir();
+    options?.homeDirectory ??
+    environment.HOME ??
+    environment.USERPROFILE ??
+    (yield* HostProcess.HomeDirectory);
   const candidatePaths = [
     path.join(homeDirectory, ".claude.json"),
     path.join(homeDirectory, ".claude", "settings.json"),
