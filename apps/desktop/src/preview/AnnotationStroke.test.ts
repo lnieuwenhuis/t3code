@@ -1,23 +1,16 @@
-import type { PreviewAnnotationPoint, PreviewAnnotationRect } from "@t3tools/contracts";
+import type { PreviewAnnotationPoint } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  STROKE_CHUNK_SEGMENTS,
-  beginStroke,
-  extendStroke,
+  addStrokePoint,
+  openStrokePath,
+  startStroke,
   strokeBounds,
-  strokeChunkPath,
-  strokePath,
-  takeClosedChunk,
+  STROKE_SEGMENTS_PER_PATH,
 } from "./AnnotationStroke.ts";
 
-/**
- * The rescan-everything implementations these helpers replaced. Kept here as
- * the oracle for the incremental versions: same output, without the per-point
- * copy, rescan and rebuild.
- */
-const naivePath = (points: ReadonlyArray<PreviewAnnotationPoint>): string => {
-  if (points.length === 1) return `M ${points[0]!.x} ${points[0]!.y} l 0.01 0.01`;
+// The Draw tool used to rebuild the whole path and rescan every point on each move.
+const fullPath = (points: ReadonlyArray<PreviewAnnotationPoint>): string => {
   let path = `M ${points[0]!.x} ${points[0]!.y}`;
   for (let index = 1; index < points.length - 1; index += 1) {
     const current = points[index]!;
@@ -25,14 +18,10 @@ const naivePath = (points: ReadonlyArray<PreviewAnnotationPoint>): string => {
     path += ` Q ${current.x} ${current.y} ${(current.x + next.x) / 2} ${(current.y + next.y) / 2}`;
   }
   const last = points[points.length - 1]!;
-  path += ` L ${last.x} ${last.y}`;
-  return path;
+  return `${path} L ${last.x} ${last.y}`;
 };
 
-const naiveBounds = (
-  points: ReadonlyArray<PreviewAnnotationPoint>,
-  width: number,
-): PreviewAnnotationRect => {
+const fullBounds = (points: ReadonlyArray<PreviewAnnotationPoint>, width: number) => {
   const xs = points.map((point) => point.x);
   const ys = points.map((point) => point.y);
   const padding = width + 3;
@@ -43,39 +32,51 @@ const naiveBounds = (
   return { x: left, y: top, width: right - left, height: bottom - top };
 };
 
-/** Deterministic jitter, so a failure is reproducible. */
-const wobble = (count: number): Array<PreviewAnnotationPoint> => {
-  const points: Array<PreviewAnnotationPoint> = [];
-  let seed = 7;
-  for (let index = 0; index < count; index += 1) {
-    seed = (seed * 48271) % 2147483647;
-    points.push({ x: index + (seed % 17), y: 400 - (seed % 29) });
-  }
-  return points;
-};
+// Each later path starts with a move to where the previous one ended.
+const joinPaths = (paths: ReadonlyArray<string>): string =>
+  paths
+    .map((path, index) => {
+      if (index === 0) return path;
+      const resume = path.match(/^M (\S+ \S+)/)![1]!;
+      expect(paths[index - 1]!.endsWith(` ${resume}`)).toBe(true);
+      return path.slice(`M ${resume}`.length);
+    })
+    .join("");
 
 describe("stroke geometry", () => {
-  it("matches the full-rescan path and bounds at every length", () => {
-    const points = wobble(200);
-    const geometry = beginStroke(points[0]!);
+  it("draws the same curve and bounds as a full rescan at every length", () => {
+    const points = Array.from({ length: STROKE_SEGMENTS_PER_PATH * 5 + 5 }, (_, index) => ({
+      x: index * 3 + ((index * 7) % 11),
+      y: 200 + ((index * 13) % 29) - index,
+    }));
+    const geometry = startStroke(points[0]!);
+    const closedPaths: string[] = [];
+    let longestRewrite = 0;
     for (let index = 1; index < points.length; index += 1) {
-      extendStroke(geometry, points[index]!);
-      const seen = points.slice(0, index + 1);
-      expect(strokePath(geometry)).toBe(naivePath(seen));
-      expect(strokeBounds(geometry, 4)).toEqual(naiveBounds(seen, 4));
+      const closedPath = addStrokePoint(geometry, points[index]!);
+      if (closedPath !== null) closedPaths.push(closedPath);
+      const drawn = points.slice(0, index + 1);
+      const openPath = openStrokePath(geometry);
+      longestRewrite = Math.max(longestRewrite, openPath.length);
+      expect(joinPaths([...closedPaths, openPath])).toBe(fullPath(drawn));
+      expect(strokeBounds(geometry, 4)).toEqual(fullBounds(drawn, 4));
     }
+    expect(closedPaths).toHaveLength(5);
+    expect(longestRewrite).toBeLessThan(5_000);
+    expect(fullPath(points).length).toBeGreaterThan(longestRewrite * 2);
+    expect(geometry.points).toEqual(points);
   });
 
   it("renders a single point as a dot", () => {
-    const geometry = beginStroke({ x: 12, y: 34 });
-    expect(strokePath(geometry)).toBe("M 12 34 l 0.01 0.01");
+    const geometry = startStroke({ x: 12, y: 34 });
+    expect(openStrokePath(geometry)).toBe("M 12 34 l 0.01 0.01");
     expect(strokeBounds(geometry, 4)).toEqual({ x: 5, y: 27, width: 14, height: 14 });
   });
 
   it("appends in place so the stroke target sees every point", () => {
-    const geometry = beginStroke({ x: 0, y: 0 });
+    const geometry = startStroke({ x: 0, y: 0 });
     const points = geometry.points;
-    extendStroke(geometry, { x: 5, y: 5 });
+    expect(addStrokePoint(geometry, { x: 5, y: 5 })).toBeNull();
     expect(geometry.points).toBe(points);
     expect(points).toEqual([
       { x: 0, y: 0 },
@@ -83,49 +84,16 @@ describe("stroke geometry", () => {
     ]);
   });
 
-  it("splits rendering into chunks that reassemble to the uncut path", () => {
-    const points = wobble(505);
-    const geometry = beginStroke(points[0]!);
-    const closed: Array<string> = [];
-    let longestRewrite = 0;
-    for (let index = 1; index < points.length; index += 1) {
-      extendStroke(geometry, points[index]!);
-      const cut = takeClosedChunk(geometry);
-      if (cut !== null) closed.push(cut);
-      longestRewrite = Math.max(longestRewrite, strokeChunkPath(geometry).length);
-    }
-    expect(takeClosedChunk(geometry)).toBeNull();
-    expect(closed).toHaveLength(Math.floor((points.length - 2) / STROKE_CHUNK_SEGMENTS));
-
-    // Every cut hands over at the exact coordinates the next chunk resumes from.
-    const chunks = [...closed, geometry.chunk];
-    for (let index = 1; index < chunks.length; index += 1) {
-      const previous = chunks[index - 1]!;
-      const handover = previous.slice(previous.lastIndexOf(" Q"));
-      const [, , , midX, midY] = handover.trim().split(" ");
-      expect(chunks[index]!.startsWith(`M ${midX} ${midY}`)).toBe(true);
-    }
-
-    // Stripping each resume `M` and concatenating restores the uncut prefix.
-    const reassembled = chunks
-      .map((chunk, index) => (index === 0 ? chunk : chunk.replace(/^M [^ ]+ [^ ]+/, "")))
-      .join("");
-    expect(reassembled).toBe(geometry.prefix);
-
-    // The renderer only ever re-parses one chunk of path text per move.
-    expect(longestRewrite).toBeLessThan(5_000);
-    expect(strokePath(geometry).length).toBeGreaterThan(longestRewrite * 2);
-  });
-
-  it("survives a stroke longer than the engine's argument limit", () => {
-    // `Math.min(...xs)` throws RangeError somewhere past ~100k arguments, and a
-    // per-point rescan would not finish this inside the test timeout.
-    const geometry = beginStroke({ x: 0, y: 0 });
+  it("keeps the rewritten path short for a stroke past the engine's argument limit", () => {
+    const geometry = startStroke({ x: 0, y: 0 });
+    let firstClosedPath: string | null = null;
     for (let index = 1; index < 250_000; index += 1) {
-      extendStroke(geometry, { x: index % 800, y: index % 600 });
+      const closedPath = addStrokePoint(geometry, { x: index % 800, y: index % 600 });
+      firstClosedPath ??= closedPath;
     }
+    expect(firstClosedPath).toMatch(/^M 0 0 Q /);
     expect(geometry.points).toHaveLength(250_000);
     expect(strokeBounds(geometry, 4)).toEqual({ x: -7, y: -7, width: 813, height: 613 });
-    expect(strokePath(geometry)).toMatch(/^M 0 0 Q /);
+    expect(openStrokePath(geometry).length).toBeLessThan(STROKE_SEGMENTS_PER_PATH * 40);
   });
 });

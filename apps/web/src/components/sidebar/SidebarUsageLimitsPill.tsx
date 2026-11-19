@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
-import { formatDuration } from "@t3tools/shared/usageLimits";
+import { formatDuration } from "@t3tools/shared/usageLimitsCopy";
 import { useNavigate } from "@tanstack/react-router";
+import { msg, useGT, useMessages } from "gt-react";
 import { useState } from "react";
 
 import { useClientSettings } from "../../hooks/useSettings";
@@ -36,6 +37,7 @@ export function SidebarUsageLimitsPill() {
 }
 
 function SidebarUsageLimitsPillContent() {
+  const gt = useGT();
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
   const layout = useClientSettings((settings) => settings.sidebarUsageLimitsLayout);
@@ -55,7 +57,7 @@ function SidebarUsageLimitsPillContent() {
   return (
     <div
       role="group"
-      aria-label="Usage limits"
+      aria-label={gt("Usage limits")}
       className="grid w-full auto-rows-[1.75rem] overflow-hidden rounded-lg bg-sidebar-control-surface text-xs font-medium"
       style={{
         gridTemplateColumns: `repeat(${sidebarLimitColumns(limits.length, layout)}, minmax(0, 1fr))`,
@@ -75,6 +77,7 @@ function SidebarLimitSegment({
   readonly limit: SidebarLimitView;
   readonly onClick: () => void;
 }) {
+  const gt = useGT();
   const option = providerClients.get(limit.driver);
   const label = option?.label ?? String(limit.driver);
   return (
@@ -83,7 +86,10 @@ function SidebarLimitSegment({
         render={
           <button
             type="button"
-            aria-label={`${label}: ${limit.remainingPercent}% left. Open usage limits.`}
+            aria-label={gt("{label}: {remaining}% left. Open usage limits.", {
+              label,
+              remaining: limit.remainingPercent,
+            })}
             className={cn(
               "flex min-w-0 items-center justify-center gap-1.5 px-2 outline-none transition-colors hover:bg-sidebar-row-hover focus-visible:bg-sidebar-row-hover",
               TONE_STYLES[limit.tone],
@@ -114,23 +120,36 @@ function SidebarLimitDetails({
   readonly label: string;
   readonly limit: SidebarLimitView;
 }) {
+  const gt = useGT();
+  const m = useMessages();
   const [now] = useState(() => Date.now());
   return (
     <div className="flex flex-col gap-0.5">
       <span className="text-foreground">
-        {label}
-        {limit.accountCount > 1 ? ` · ${limit.accountCount} accounts` : ""}
+        {limit.accountCount > 1
+          ? gt("{label} · {count} accounts", { label, count: limit.accountCount })
+          : label}
       </span>
-      {limit.windows.map((window) => (
-        <span key={window.id} className="text-muted-foreground tabular-nums">
-          {window.label}: {window.remainingPercent}% left
-          {window.resetsAt === null
-            ? ""
+      {limit.windows.map((window) => {
+        const values = { label: window.label, remaining: window.remainingPercent };
+        const resetsIn =
+          window.resetsAt === null
+            ? null
             : window.resetsAt <= now
-              ? " · resets now"
-              : ` · resets in ${formatDuration(window.resetsAt - now)}`}
-        </span>
-      ))}
+              ? m(msg("resets now"))
+              : m(
+                  msg("resets in {duration}", {
+                    duration: formatDuration(window.resetsAt - now, m),
+                  }),
+                );
+        return (
+          <span key={window.id} className="text-muted-foreground tabular-nums">
+            {resetsIn === null
+              ? gt("{label}: {remaining}% left", values)
+              : gt("{label}: {remaining}% left · {resetsIn}", { ...values, resetsIn })}
+          </span>
+        );
+      })}
     </div>
   );
 }
