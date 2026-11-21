@@ -1,4 +1,5 @@
 import { pipe } from "effect/Function";
+import * as ServerSettings from "../../serverSettings.ts";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import { brokenRuntimeError } from "../../provider/providerCompatibility.ts";
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
@@ -791,6 +792,15 @@ function codexRuntimeModeTurnDefaults(runtimeMode: RuntimeMode): {
         },
       };
   }
+}
+
+// An explicit approval or sandbox override stays authoritative over default Full access.
+function usesCodexFullAccessDefaults(policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy) {
+  return (
+    policy.runtimeMode === "full-access" &&
+    policy.approvalPolicy === undefined &&
+    policy.sandboxPolicy === undefined
+  );
 }
 
 const isCodexCyberAccessProgram = Schema.is(CodexSchema.V2TurnStartParams__CyberAccessProgram);
@@ -1945,6 +1955,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
   adapterOptions: CodexAdapterV2Options,
 ) {
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+  const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+  const autoApproveSafetyChecksEnabled = Option.isNone(serverSettings)
+    ? Effect.succeed(false)
+    : serverSettings.value.getSettings.pipe(
+        Effect.map((settings) => settings.autoApproveFullAccessSafetyChecks),
+        Effect.orElseSucceed(() => false),
+      );
   const readMcpSession = (threadId: ThreadId | null) =>
     threadId === null ? Effect.undefined : mcpSessions.read(threadId);
   const { clientFactory, digest, fileSystem, idAllocator, serverConfig } = adapterOptions;
@@ -5930,6 +5947,19 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 payload,
               );
             }
+            // Under granular Full access, Codex still asks before commands it deems dangerous.
+            // Terminal input and managed-network prompts remain with the user.
+            if (
+              usesCodexFullAccessDefaults(context.input.runtimePolicy) &&
+              (payload.kind ?? "command") === "command" &&
+              (payload.networkApprovalContext ?? null) === null &&
+              (payload.proposedNetworkPolicyAmendments ?? []).length === 0 &&
+              (yield* autoApproveSafetyChecksEnabled)
+            ) {
+              return {
+                decision: "accept",
+              } satisfies CodexSchema.CommandExecutionRequestApprovalResponse;
+            }
             const allowance = sessionAllowance(payload.threadId, context);
             if (allowance.has("command")) {
               return {
@@ -6000,6 +6030,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 `No active Codex turn context for file change approval turn ${payload.turnId}.`,
                 payload,
               );
+            }
+            // A grant root requests session-wide folder writes, which stays with the user.
+            if (
+              usesCodexFullAccessDefaults(context.input.runtimePolicy) &&
+              (payload.grantRoot ?? null) === null &&
+              (yield* autoApproveSafetyChecksEnabled)
+            ) {
+              return {
+                decision: "accept",
+              } satisfies CodexSchema.FileChangeRequestApprovalResponse;
             }
             const allowance = sessionAllowance(payload.threadId, context);
             if (allowance.has("file-change")) {

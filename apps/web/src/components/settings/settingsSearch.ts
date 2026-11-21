@@ -326,6 +326,20 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "auto-approve-full-access-safety-checks",
+    title: msg("Approve safety checks in Full access"),
+    to: "/settings/threads",
+    searchTerms: [
+      msg("full access codex claude dangerous command safety prompt auto approve unattended"),
+    ],
+  },
+  {
+    id: "parent-agent-can-approve-subagents",
+    title: msg("Parent agents can approve subagents"),
+    to: "/settings/threads",
+    searchTerms: [msg("delegated subagent child approval permission parent agent approve decline")],
+  },
+  {
     id: "color-scheme",
     title: msg("Color scheme"),
     to: "/settings/appearance",

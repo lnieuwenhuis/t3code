@@ -55,6 +55,17 @@ continues without the removal and tells you what it skipped.
 While a Claude approval is pending, type a text reply to decline that request and give feedback
 directly to the agent that asked, including a subagent. Other pending requests stay unanswered.
 
+To automatically approve provider safety prompts that Codex and Claude Code still raise in
+**Full access**, turn on **Approve safety checks in Full access** under **Settings → Threads →
+Approvals**. Claude's dangerous-removal check, organization policies, and your own ask rules
+still stop, and Codex still asks before network access, terminal input, and folder-wide write
+grants.
+
+When a delegated subagent blocks on an approval, its parent thread is notified. By default the
+notice is advisory and only you can answer it. Turn on **Parent agents can approve subagents**
+under **Settings → Threads → Approvals** to let a parent agent inspect and approve or decline
+pending approvals on its own delegated subagent threads.
+
 Antigravity can still send native approval requests in **Full access**. It only offers remembered
 approvals for actions that support them.
 

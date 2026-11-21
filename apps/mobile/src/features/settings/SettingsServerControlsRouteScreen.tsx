@@ -373,6 +373,36 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                     />
                   ))}
                 </SettingsSection>
+                {projectSelected ? null : (
+                  <SettingsSection title={gt("Approvals")}>
+                    <SettingsSwitchRow
+                      icon="checkmark.circle"
+                      label={gt("Approve safety checks in Full access")}
+                      subtitle={managedSubtitle(
+                        "autoApproveFullAccessSafetyChecks",
+                        gt(
+                          "Automatically approve provider safety prompts that Codex and Claude Code still raise in Full access. Claude's dangerous-removal check, organization policies, your ask rules, and Codex network, terminal-input, and folder-write grants still stop.",
+                        ),
+                      )}
+                      value={uniform("autoApproveFullAccessSafetyChecks")}
+                      disabled={disabledFor("autoApproveFullAccessSafetyChecks")}
+                      onValueChange={(value) => write({ autoApproveFullAccessSafetyChecks: value })}
+                    />
+                    <SettingsSwitchRow
+                      icon="person.crop.circle"
+                      label={gt("Parent agents can approve subagents")}
+                      subtitle={managedSubtitle(
+                        "parentAgentCanApproveSubagents",
+                        gt(
+                          "Let a parent agent inspect and approve or decline pending permission requests on its own delegated subagent threads. Agents can never approve their own requests.",
+                        ),
+                      )}
+                      value={uniform("parentAgentCanApproveSubagents")}
+                      disabled={disabledFor("parentAgentCanApproveSubagents")}
+                      onValueChange={(value) => write({ parentAgentCanApproveSubagents: value })}
+                    />
+                  </SettingsSection>
+                )}
                 <SettingsSection
                   title={gt("Response streaming")}
                   footer={managed("responseStreamingMode")}

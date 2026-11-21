@@ -10,6 +10,7 @@ import {
   CommandId,
   CheckpointId,
   CodexSettings,
+  DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   MessageId,
   type ModelSelection,
@@ -75,6 +76,7 @@ import * as ProviderReplayHarness from "../testkit/ProviderReplayHarness.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import type * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import * as ModelManifest from "../../provider/ModelManifest.ts";
+import * as ServerSettings from "../../serverSettings.ts";
 import * as PortScanner from "../../preview/PortScanner.ts";
 import { resolveProviderCompatibility } from "../../provider/providerCompatibility.ts";
 import * as CodexAdapterV2 from "./CodexAdapterV2.ts";
@@ -1800,6 +1802,163 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             McpProviderSessions.layer,
             NodeServices.layer,
             NodeCrypto.layer,
+          ),
+        ),
+      ),
+  );
+
+  it.effect.each([
+    {
+      name: "prompts when setting is off",
+      autoApprove: false,
+      method: "item/commandExecution/requestApproval" as const,
+      params: { itemId: "exec-1", command: "/bin/bash -lc 'rm -rf ./tmp'" },
+      expectAutoAccept: false,
+    },
+    {
+      name: "auto-accepts dangerous command in default full access when enabled",
+      autoApprove: true,
+      method: "item/commandExecution/requestApproval" as const,
+      params: { itemId: "exec-1", command: "/bin/bash -lc 'rm -rf ./tmp'" },
+      expectAutoAccept: true,
+    },
+    {
+      name: "auto-accepts patch without grantRoot in default full access when enabled",
+      autoApprove: true,
+      method: "item/fileChange/requestApproval" as const,
+      params: { itemId: "patch-1" },
+      expectAutoAccept: true,
+    },
+    {
+      name: "keeps explicit approvalPolicy override with the user",
+      autoApprove: true,
+      method: "item/commandExecution/requestApproval" as const,
+      params: { itemId: "exec-1", command: "/bin/bash -lc 'rm -rf ./tmp'" },
+      approvalPolicy: "on-request" as const,
+      expectAutoAccept: false,
+    },
+    {
+      name: "keeps managed-network command approvals with the user",
+      autoApprove: true,
+      method: "item/commandExecution/requestApproval" as const,
+      params: {
+        itemId: "exec-1",
+        command: "curl https://example.com",
+        networkApprovalContext: { host: "example.com", protocol: "https" },
+      },
+      expectAutoAccept: false,
+    },
+    {
+      name: "keeps writeStdin prompts with the user",
+      autoApprove: true,
+      method: "item/commandExecution/requestApproval" as const,
+      params: { itemId: "exec-1", kind: "writeStdin", command: "y\n" },
+      expectAutoAccept: false,
+    },
+    {
+      name: "keeps grantRoot file-change approvals with the user",
+      autoApprove: true,
+      method: "item/fileChange/requestApproval" as const,
+      params: { itemId: "patch-1", grantRoot: "/workspace" },
+      expectAutoAccept: false,
+    },
+  ])(
+    "full access safety check setting: $name",
+    ({ autoApprove, method, params, approvalPolicy, expectAutoAccept }) =>
+      Effect.gen(function* () {
+        const nativeThreadId = "safety-setting-thread";
+        const nativeTurnId = "safety-setting-turn";
+        const prompt = "Clean up scratch files.";
+        const pending = yield* Queue.unbounded<OrchestrationV2RuntimeRequest>();
+        const harness = yield* makeCodexReplayHarness(
+          makeCodexReplayTranscript({
+            scenario: "full-access-safety-setting",
+            entries: [
+              ...codexReplayPreamble({
+                nativeThreadId,
+                nativeTurnId,
+                prompt,
+                ...(approvalPolicy === undefined ? {} : { turnPolicy: { approvalPolicy } }),
+              }),
+              {
+                type: "emit_inbound",
+                frame: {
+                  id: 0,
+                  method,
+                  params: {
+                    threadId: nativeThreadId,
+                    turnId: nativeTurnId,
+                    startedAtMs: 0,
+                    ...params,
+                  },
+                },
+              },
+              { type: "expect_outbound", frame: { id: 0, result: { decision: "accept" } } },
+              {
+                type: "emit_inbound",
+                frame: {
+                  method: "turn/completed",
+                  params: {
+                    threadId: nativeThreadId,
+                    turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                  },
+                },
+              },
+            ],
+          }),
+          (event) =>
+            event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending"
+              ? Queue.offer(pending, event.runtimeRequest)
+              : Effect.void,
+        );
+        const turnInput = makeCodexTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("safety-setting-attempt"),
+          text: prompt,
+        });
+        yield* harness.runtime.startTurn({
+          ...turnInput,
+          runtimePolicy: {
+            ...turnInput.runtimePolicy,
+            runtimeMode: "full-access",
+            ...(approvalPolicy === undefined ? {} : { approvalPolicy }),
+          },
+        });
+        if (expectAutoAccept) {
+          const request = yield* Effect.raceFirst(
+            harness.firstTerminal.pipe(Effect.as(undefined)),
+            Queue.take(pending),
+          );
+          assert.isUndefined(request);
+        } else {
+          const request = yield* Effect.raceFirst(
+            Queue.take(pending),
+            harness.firstTerminal.pipe(Effect.andThen(Effect.die("Expected approval request"))),
+          );
+          yield* harness.runtime.respondToRuntimeRequest({
+            requestId: request.id,
+            decision: "accept",
+          });
+          yield* harness.firstTerminal;
+        }
+        assert.deepEqual(
+          harness.terminalEvents().map((event) => event.status),
+          ["completed"],
+        );
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            NodeServices.layer,
+            NodeCrypto.layer,
+            ServerSettings.ServerSettingsService.layerTest({
+              ...DEFAULT_SERVER_SETTINGS,
+              autoApproveFullAccessSafetyChecks: autoApprove,
+            }),
           ),
         ),
       ),

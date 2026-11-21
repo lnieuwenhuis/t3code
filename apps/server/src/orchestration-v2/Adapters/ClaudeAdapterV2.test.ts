@@ -994,6 +994,81 @@ describe("ClaudeAdapterV2 approval presentation", () => {
     assert.deepEqual(presentation, { fullAccessOverride: "ask_rule" });
   });
 
+  it("auto-approves Claude safety checks only when enabled in bypass mode without policy or user-input overrides", () => {
+    const baseOptions = {
+      signal: new AbortController().signal,
+      toolUseID: "tool-1",
+      requestId: "req-1",
+    };
+    assert.isTrue(
+      ClaudeAdapterV2.claudeFullAccessApprovesSafetyCheck({
+        enabled: true,
+        permissionMode: "bypassPermissions",
+        safetyReason: "This call's input holds your account email address.",
+        callbackOptions: baseOptions,
+      }),
+    );
+    assert.isFalse(
+      ClaudeAdapterV2.claudeFullAccessApprovesSafetyCheck({
+        enabled: false,
+        permissionMode: "bypassPermissions",
+        safetyReason: "This call's input holds your account email address.",
+        callbackOptions: baseOptions,
+      }),
+    );
+    assert.isFalse(
+      ClaudeAdapterV2.claudeFullAccessApprovesSafetyCheck({
+        enabled: true,
+        permissionMode: "default",
+        safetyReason: "This call's input holds your account email address.",
+        callbackOptions: baseOptions,
+      }),
+    );
+    assert.isFalse(
+      ClaudeAdapterV2.claudeFullAccessApprovesSafetyCheck({
+        enabled: true,
+        permissionMode: "bypassPermissions",
+        safetyReason: "",
+        callbackOptions: {
+          ...baseOptions,
+          matchedAskRule: { source: "userSettings", toolName: "Bash", ruleContent: "git push:*" },
+        },
+      }),
+    );
+    assert.isFalse(
+      ClaudeAdapterV2.claudeFullAccessApprovesSafetyCheck({
+        enabled: true,
+        permissionMode: "bypassPermissions",
+        safetyReason: "Your organization requires approval for this tool.",
+        callbackOptions: baseOptions,
+      }),
+    );
+    assert.isFalse(
+      ClaudeAdapterV2.claudeFullAccessApprovesSafetyCheck({
+        enabled: true,
+        permissionMode: "bypassPermissions",
+        safetyReason: "",
+        callbackOptions: { ...baseOptions, decisionReasonCode: "org_ask_ceiling" } as never,
+      }),
+    );
+    assert.isFalse(
+      ClaudeAdapterV2.claudeFullAccessApprovesSafetyCheck({
+        enabled: true,
+        permissionMode: "bypassPermissions",
+        safetyReason: "",
+        callbackOptions: { ...baseOptions, serverPolicyAskOnly: true } as never,
+      }),
+    );
+    assert.isFalse(
+      ClaudeAdapterV2.claudeFullAccessApprovesSafetyCheck({
+        enabled: true,
+        permissionMode: "bypassPermissions",
+        safetyReason: "",
+        callbackOptions: { ...baseOptions, requiresUserInteraction: true } as never,
+      }),
+    );
+  });
+
   it("adds nothing to ordinary approvals outside full access", () => {
     const presentation = ClaudeAdapterV2.claudeApprovalPresentation({
       permissionMode: "default",
