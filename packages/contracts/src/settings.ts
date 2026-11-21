@@ -1511,6 +1511,14 @@ export const ServerSettings = Schema.Struct({
   linkedEnvironmentsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   /** Beta: Claude and Codex predict the next prompt after completed turns. Codex follows a change at once; open Claude threads after they restart. */
   promptSuggestionsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /** When on, Full access also approves provider-side safety checks that Codex and Claude Code still forward in bypass/granular mode. */
+  autoApproveFullAccessSafetyChecks: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
+  /** When on, a parent thread's agent can inspect and approve or decline pending approvals on its owned subagent threads. */
+  parentAgentCanApproveSubagents: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
   sidebarAutoSettleKeepPullRequests: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
@@ -1946,6 +1954,8 @@ export const ServerSettingsPatch = Schema.Struct({
   guestSharingEnabled: Schema.optionalKey(Schema.Boolean),
   linkedEnvironmentsEnabled: Schema.optionalKey(Schema.Boolean),
   promptSuggestionsEnabled: Schema.optionalKey(Schema.Boolean),
+  autoApproveFullAccessSafetyChecks: Schema.optionalKey(Schema.Boolean),
+  parentAgentCanApproveSubagents: Schema.optionalKey(Schema.Boolean),
   backgroundActivity: Schema.optionalKey(
     Schema.Struct({
       schemaVersion: Schema.optionalKey(Schema.Literal(1)),

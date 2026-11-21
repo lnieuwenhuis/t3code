@@ -2124,6 +2124,47 @@ export function ThreadsSettingsPanel() {
       <ProjectDefaultsSettings category="general" />
 
       {!isProjectScope ? (
+        <SettingsSection id="approvals" title={gt("Approvals")}>
+          <SettingsRow
+            serverScoped
+            settingKeys={["autoApproveFullAccessSafetyChecks"]}
+            {...setting("auto-approve-full-access-safety-checks")}
+            description={gt(
+              "In Full access, automatically approve provider safety prompts that Codex and Claude Code still raise. Claude's dangerous-removal check, organization policies, your ask rules, and Codex network, terminal-input, and folder-write grants still stop.",
+            )}
+            control={
+              <ScopedSwitch
+                settingKeys={["autoApproveFullAccessSafetyChecks"]}
+                checked={settings.autoApproveFullAccessSafetyChecks}
+                onCheckedChange={(checked) =>
+                  updateSettings({ autoApproveFullAccessSafetyChecks: Boolean(checked) })
+                }
+                aria-label={gt("Approve safety checks in Full access")}
+              />
+            }
+          />
+          <SettingsRow
+            serverScoped
+            settingKeys={["parentAgentCanApproveSubagents"]}
+            {...setting("parent-agent-can-approve-subagents")}
+            description={gt(
+              "Let a parent agent inspect and approve or decline pending permission requests on its own delegated subagent threads. Agents can never approve their own requests.",
+            )}
+            control={
+              <ScopedSwitch
+                settingKeys={["parentAgentCanApproveSubagents"]}
+                checked={settings.parentAgentCanApproveSubagents}
+                onCheckedChange={(checked) =>
+                  updateSettings({ parentAgentCanApproveSubagents: Boolean(checked) })
+                }
+                aria-label={gt("Parent agents can approve subagents")}
+              />
+            }
+          />
+        </SettingsSection>
+      ) : null}
+
+      {!isProjectScope ? (
         <SettingsSection id="snooze" title={gt("Snooze")}>
           <SnoozePresetsRow />
         </SettingsSection>

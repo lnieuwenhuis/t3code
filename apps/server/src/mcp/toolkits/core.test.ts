@@ -300,6 +300,177 @@ it.effect("a pending question read keeps option previews", () => {
   );
 });
 
+it.effect(
+  "parent agents can inspect and approve owned subagent approvals only when enabled",
+  () => {
+    const parentId = threadId;
+    const childId = ThreadId.make("child-subagent-thread");
+    const grandchildId = ThreadId.make("grandchild-subagent-thread");
+    const unrelatedId = ThreadId.make("unrelated-thread");
+    const parentShell = McpToolAccessTestkit.liveThreadShell(parentId);
+    const childShell: OrchestrationV2ThreadShell = {
+      ...McpToolAccessTestkit.liveThreadShell(childId),
+      lineage: {
+        rootThreadId: parentId,
+        parentThreadId: parentId,
+        relationshipToParent: "subagent",
+      },
+    };
+    const grandchildShell: OrchestrationV2ThreadShell = {
+      ...McpToolAccessTestkit.liveThreadShell(grandchildId),
+      lineage: {
+        rootThreadId: parentId,
+        parentThreadId: childId,
+        relationshipToParent: "subagent",
+      },
+    };
+    const unrelatedShell = McpToolAccessTestkit.liveThreadShell(unrelatedId);
+    const shells = new Map<ThreadId, OrchestrationV2ThreadShell>([
+      [parentId, parentShell],
+      [childId, childShell],
+      [grandchildId, grandchildShell],
+      [unrelatedId, unrelatedShell],
+    ]);
+    const requestId = RuntimeRequestId.make("pending-cmd-approval");
+    const dispatched: Array<OrchestrationV2ServerCommand> = [];
+
+    const runCase = (enabled: boolean) =>
+      Effect.gen(function* () {
+        const server = yield* McpServer.McpServer;
+        const call = (args: Record<string, unknown>) =>
+          server
+            .callTool({ name: "t3_pending_request", arguments: args })
+            .pipe(
+              Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+              Effect.provideService(McpSchema.McpServerClient, client),
+            );
+        return {
+          listChild: yield* call({ action: "list", threadId: childId }),
+          readChild: yield* call({ action: "read", threadId: childId, requestId }),
+          approveChild: yield* call({
+            action: "respond",
+            threadId: childId,
+            requestId,
+            decision: "accept",
+          }),
+          approveGrandchild: yield* call({
+            action: "respond",
+            threadId: grandchildId,
+            requestId,
+            decision: "decline",
+          }),
+          approveSelf: yield* call({
+            action: "respond",
+            threadId: parentId,
+            requestId,
+            decision: "accept",
+          }),
+          approveUnrelated: yield* call({
+            action: "respond",
+            threadId: unrelatedId,
+            requestId,
+            decision: "accept",
+          }),
+        };
+      }).pipe(
+        Effect.provide(
+          layerThreadToolkit.pipe(
+            Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+            Layer.provide(NodeCrypto.layer),
+            Layer.provide(
+              ServerSettings.ServerSettingsService.layerTest({
+                ...DEFAULT_SERVER_SETTINGS,
+                parentAgentCanApproveSubagents: enabled,
+              }),
+            ),
+            Layer.provide(
+              Layer.mock(ThreadManagement.ThreadManagementService)({
+                getThreadShell: (id) => Effect.succeed(shells.get(id) ?? null),
+                getProjectThreadRecords: ({ threadId: id }) => {
+                  const shell = shells.get(id)!;
+                  const base = McpToolAccessTestkit.idleThreadProjection(shell);
+                  return Effect.succeed({
+                    ...base,
+                    runtimeRequests: [
+                      {
+                        id: requestId,
+                        nodeId: NodeId.make("approval-node"),
+                        providerTurnId: null,
+                        nativeRequestRef: null,
+                        kind: "command",
+                        status: "pending",
+                        responseCapability: {
+                          type: "live",
+                          providerSessionId: "provider-session:test" as never,
+                        },
+                        createdAt: shell.createdAt,
+                        resolvedAt: null,
+                      },
+                    ],
+                    turnItems: [
+                      {
+                        id: TurnItemId.make("approval-item"),
+                        threadId: id,
+                        runId: null,
+                        nodeId: NodeId.make("approval-node"),
+                        providerThreadId: null,
+                        providerTurnId: null,
+                        nativeItemRef: null,
+                        parentItemId: null,
+                        ordinal: 0,
+                        status: "running",
+                        title: null,
+                        startedAt: shell.createdAt,
+                        completedAt: null,
+                        updatedAt: shell.updatedAt,
+                        type: "approval_request",
+                        requestId,
+                        requestKind: "command",
+                        prompt: "rm -rf ./tmp",
+                        reason: "Confirm cleanup",
+                      },
+                    ],
+                  });
+                },
+                dispatch: (command) => {
+                  dispatched.push(command);
+                  return Effect.succeed({ sequence: dispatched.length } as never);
+                },
+              }),
+            ),
+          ),
+        ),
+      );
+
+    return Effect.gen(function* () {
+      const disabled = yield* runCase(false);
+      expect(disabled.listChild.structuredContent).toEqual({ requestIds: [] });
+      expect(declaredFailure(disabled.readChild)).toMatchObject({ code: "invalid_request" });
+      expect(declaredFailure(disabled.approveChild)).toMatchObject({ code: "capability_denied" });
+      expect(dispatched).toHaveLength(0);
+
+      const enabled = yield* runCase(true);
+      expect(enabled.listChild.structuredContent).toEqual({ requestIds: [requestId] });
+      expect(enabled.readChild.structuredContent).toEqual({
+        requestId,
+        kind: "command",
+        prompt: "rm -rf ./tmp",
+        reason: "Confirm cleanup",
+      });
+      expect(enabled.approveChild.structuredContent).toEqual({ sequence: 1 });
+      expect(enabled.approveGrandchild.structuredContent).toEqual({ sequence: 2 });
+      expect(declaredFailure(enabled.approveSelf)).toMatchObject({ code: "capability_denied" });
+      expect(declaredFailure(enabled.approveUnrelated)).toMatchObject({
+        code: "capability_denied",
+      });
+      expect(dispatched).toMatchObject([
+        { type: "runtime-request.respond", threadId: childId, requestId, decision: "accept" },
+        { type: "runtime-request.respond", threadId: grandchildId, requestId, decision: "decline" },
+      ]);
+    });
+  },
+);
+
 it("bounds public command rejections and redacts internal dispatch causes", () => {
   const command = { commandId: CommandId.make("mcp-core-command"), commandType: "thread.settle" };
   expect(

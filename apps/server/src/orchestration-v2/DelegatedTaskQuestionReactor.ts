@@ -4,12 +4,15 @@ import {
   type OrchestrationV2DomainEvent,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2Subagent,
+  ProviderRequestKind,
   type RuntimeRequestId,
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
@@ -17,8 +20,13 @@ import { reportLabel } from "@t3tools/provider-core/server/notification";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
 
 import { forkParked } from "../serverActivation.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+
+const isApprovalKind = Schema.is(ProviderRequestKind);
+const notifiesParent = (kind: OrchestrationV2RuntimeRequest["kind"]) =>
+  kind === "user_input" || isApprovalKind(kind);
 
 export class DelegatedTaskQuestionReactor extends Context.Service<
   DelegatedTaskQuestionReactor,
@@ -31,6 +39,13 @@ export class DelegatedTaskQuestionReactor extends Context.Service<
 const make = Effect.gen(function* () {
   const engine = yield* Orchestrator.OrchestratorV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
+  const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+  const parentCanApproveSubagents = Option.isNone(serverSettings)
+    ? Effect.succeed(false)
+    : serverSettings.value.getSettings.pipe(
+        Effect.map((settings) => settings.parentAgentCanApproveSubagents),
+        Effect.orElseSucceed(() => false),
+      );
 
   const wakeParent = Effect.fnUntraced(function* (
     task: OrchestrationV2Subagent,
@@ -39,20 +54,28 @@ const make = Effect.gen(function* () {
     if (task.childThreadId === null) return;
     const key = `${task.threadId}:${request.id}`;
     const label = reportLabel(task.title?.trim() || task.prompt);
+    const quotedLabel = label === undefined ? "" : ` "${label}"`;
+    const approval = isApprovalKind(request.kind);
+    const canApprove = approval ? yield* parentCanApproveSubagents : false;
     const situation =
       request.responseCapability.type === "message"
         ? `Delegated task ${task.id} asked a question and is still working.`
         : `Delegated task ${task.id} is blocked on a question and cannot continue until it is answered.`;
+    const text = approval
+      ? canApprove
+        ? `Delegated task ${task.id} is blocked on a ${request.kind} approval (requestId ${request.id}, threadId ${task.childThreadId}). Inspect it with t3_pending_request action read, threadId ${task.childThreadId}, and requestId ${request.id}. Approve or decline it with action respond and decision ("accept" or "decline") when it fits the task; otherwise ask the user or stop the task with task_cancel. If it is no longer pending, it was resolved.`
+        : `Delegated task ${task.id} is blocked on a ${request.kind} approval (requestId ${request.id}, threadId ${task.childThreadId}) and cannot continue until the user approves or declines it in the app. You cannot approve it. Tell the user it is waiting, or stop the task with task_cancel and relaunch it if it should not need this approval. If it is no longer pending, it was resolved.`
+      : `${situation} Read it with t3_pending_request action read, threadId ${task.childThreadId}, and requestId ${request.id}. Answer it with action respond when the answer follows from the task or the user's instructions; otherwise ask the user, then answer it. If it is no longer pending, it was answered or dismissed.`;
     yield* engine.dispatch({
       type: "message.dispatch",
       commandId: CommandId.make(`server:delegated-task-question:${key}`),
       threadId: task.threadId,
       messageId: MessageId.make(`message:delegated-task-question:${key}`),
-      text: `${situation} Read it with t3_pending_request action read, threadId ${task.childThreadId}, and requestId ${request.id}. Answer it with action respond when the answer follows from the task or the user's instructions; otherwise ask the user, then answer it. If it is no longer pending, it was answered or dismissed.`,
+      text,
       notification: {
         source: { kind: "delegated_task", taskIds: [task.id], childThreadId: task.childThreadId },
         outcome: "updated",
-        summary: `Delegated task${label === undefined ? "" : ` "${label}"`} has a question`,
+        summary: `Delegated task${quotedLabel} ${approval ? "needs approval" : "has a question"}`,
       },
       attachments: [],
       dispatchMode: { type: "queue_after_active" },
@@ -115,7 +138,7 @@ const make = Effect.gen(function* () {
           ]);
           for (const request of child.runtimeRequests) {
             if (
-              request.kind !== "user_input" ||
+              !notifiesParent(request.kind) ||
               request.status !== "pending" ||
               request.responseCapability.type !== "live"
             ) {
@@ -143,12 +166,12 @@ const make = Effect.gen(function* () {
         ) {
           return;
         }
-        // A settled task can no longer use an answer to its still-pending questions.
+        // A settled task can no longer use an answer to its still-pending requests.
         const { runtimeRequests } = yield* projections.getThreadRecords(task.childThreadId, [
           "runtimeRequests",
         ]);
-        const questions = runtimeRequests.filter((request) => request.kind === "user_input");
-        if (questions.length === 0) return;
+        const pendingRequests = runtimeRequests.filter((request) => notifiesParent(request.kind));
+        if (pendingRequests.length === 0) return;
         const child = yield* projections.getThreadRecords(task.childThreadId, ["runs", "nodes"]);
         const taskRunIds = new Set(
           child.runs
@@ -168,13 +191,20 @@ const make = Effect.gen(function* () {
         );
         yield* cancelQueuedWakes(
           task.threadId,
-          questions
+          pendingRequests
             .filter((request) => taskNodeIds.has(request.nodeId))
             .map((request) => request.id),
         );
         return;
       }
-      if (event.type !== "runtime-request.updated" || event.payload.kind !== "user_input") {
+      if (event.type !== "runtime-request.updated" || !notifiesParent(event.payload.kind)) {
+        return;
+      }
+      if (
+        isApprovalKind(event.payload.kind) &&
+        event.payload.status === "pending" &&
+        event.payload.responseCapability.type !== "live"
+      ) {
         return;
       }
       const child = yield* projections.getThread(event.threadId);
@@ -237,7 +267,7 @@ const make = Effect.gen(function* () {
       case "subagent.updated":
         return Effect.succeed(event.payload.threadId);
       case "runtime-request.updated":
-        return event.payload.kind === "user_input"
+        return notifiesParent(event.payload.kind)
           ? projections
               .getThread(event.threadId)
               .pipe(Effect.map((child) => child.lineage.parentThreadId))

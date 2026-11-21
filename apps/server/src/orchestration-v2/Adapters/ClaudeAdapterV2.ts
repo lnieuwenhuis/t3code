@@ -3612,6 +3612,25 @@ function requiresClaudeApproval(context: ActiveClaudeTurnContext): boolean {
   return policy.installPermissionCallback || policy.permissionMode === "bypassPermissions";
 }
 
+/**
+ * Decides whether a CLI-forwarded safety check in Full access can be auto-approved.
+ * User ask rules, organization/server policies, and tools requiring user input stay with the user.
+ */
+export function claudeFullAccessApprovesSafetyCheck(input: {
+  readonly enabled: boolean;
+  readonly permissionMode: PermissionMode;
+  readonly safetyReason: string;
+  readonly callbackOptions: Parameters<CanUseTool>[2];
+}): boolean {
+  if (!input.enabled || input.permissionMode !== "bypassPermissions") return false;
+  if (input.callbackOptions.matchedAskRule !== undefined) return false;
+  if (Reflect.get(input.callbackOptions, "serverPolicyAskOnly") === true) return false;
+  if (Reflect.get(input.callbackOptions, "decisionReasonCode") === "org_ask_ceiling") return false;
+  if (/^Your organization requires approval\b/i.test(input.safetyReason)) return false;
+  if (Reflect.get(input.callbackOptions, "requiresUserInteraction") === true) return false;
+  return true;
+}
+
 function claudeRuntimeQueryPolicyKey(policy: ClaudeRuntimeQueryPolicy): string {
   return JSON.stringify({
     permissionMode: policy.permissionMode,
@@ -12555,6 +12574,27 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             return {
               behavior: "deny",
               message: `Claude Code's removal safety check denied this command; the user did not reject it. The command did not run. Do not bypass the check by splitting the removal, putting it in a script, or using another tool or shell. If the warning below supplies a safe rewrite, use it and let the same check evaluate it. Otherwise continue the rest of the task without the removal and tell the user what you needed to delete and why. Warning: ${safetyReason}`,
+              toolUseID: callbackOptions.toolUseID,
+            } satisfies PermissionResult;
+          }
+
+          const autoApproveSafetyChecks = Option.isNone(serverSettings)
+            ? false
+            : yield* serverSettings.value.getSettings.pipe(
+                Effect.map((settings) => settings.autoApproveFullAccessSafetyChecks),
+                Effect.orElseSucceed(() => false),
+              );
+          if (
+            claudeFullAccessApprovesSafetyCheck({
+              enabled: autoApproveSafetyChecks,
+              permissionMode: activePermissionMode,
+              safetyReason,
+              callbackOptions,
+            })
+          ) {
+            return {
+              behavior: "allow",
+              updatedInput: toolInput,
               toolUseID: callbackOptions.toolUseID,
             } satisfies PermissionResult;
           }

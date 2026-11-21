@@ -3,16 +3,21 @@ import {
   type RuntimeRequestId,
   ThreadId,
   type OrchestrationV2ThreadProjection,
+  type OrchestrationV2ThreadShell,
   type RunId,
   OrchestratorMcpFailure,
   type OrchestrationV2Command,
+  ProviderRequestKind,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { modelSelectionCommandType } from "@t3tools/shared/model";
 import { topOfPinnedRunOrderKey } from "@t3tools/shared/pinOrderKey";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
 import {
   dispatchFailure,
   newCommandId,
@@ -65,6 +70,42 @@ const topOfPinnedRunKey = Effect.fn("mcp.topOfPinnedRunKey")(function* (
   if (index === null) return undefined;
   const pinnedKeys = index.flatMap((entry) => (entry.pinnedAt == null ? [] : [entry.pinOrderKey]));
   return topOfPinnedRunOrderKey(pinnedKeys) ?? undefined;
+});
+
+const isApprovalKind = Schema.is(ProviderRequestKind);
+const MAX_SUBAGENT_APPROVAL_DEPTH = 16;
+
+const parentAgentCanApproveSubagents = Effect.fn("mcp.parentAgentCanApproveSubagents")(
+  function* () {
+    const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+    if (Option.isNone(serverSettings)) return false;
+    return yield* serverSettings.value.getSettings.pipe(
+      Effect.map((settings) => settings.parentAgentCanApproveSubagents),
+      Effect.orElseSucceed(() => false),
+    );
+  },
+);
+
+/** Only a live ancestor thread can inspect or answer subagent approvals; self-approval is always denied. */
+const isOwnedSubagentOf = Effect.fn("mcp.isOwnedSubagentOf")(function* (
+  threads: Pick<ThreadManagement.ThreadManagementService["Service"], "getThreadShell">,
+  callerThreadId: ThreadId,
+  target: Pick<OrchestrationV2ThreadShell, "id" | "lineage">,
+) {
+  if (target.id === callerThreadId) return false;
+  let parentId =
+    target.lineage.relationshipToParent === "subagent" ? target.lineage.parentThreadId : null;
+  const visited = new Set<ThreadId>([target.id]);
+  let depth = 0;
+  while (parentId !== null && depth < MAX_SUBAGENT_APPROVAL_DEPTH && !visited.has(parentId)) {
+    if (parentId === callerThreadId) return true;
+    visited.add(parentId);
+    depth += 1;
+    const parent = yield* threads.getThreadShell(parentId).pipe(Effect.orElseSucceed(() => null));
+    parentId =
+      parent?.lineage.relationshipToParent === "subagent" ? parent.lineage.parentThreadId : null;
+  }
+  return false;
 });
 
 const readQuestion = Effect.fn("mcp.readQuestion")(function* (input: {
@@ -249,22 +290,172 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
     (input) => input.action !== "respond",
     McpToolAccess.reads((input) =>
       Effect.gen(function* () {
+        const allowChildApprovals = yield* parentAgentCanApproveSubagents();
         if (input.action === "list") {
-          const { projection } = yield* readThread(input.threadId, ["runtimeRequests"]);
+          const { caller, threads, projection } = yield* readThread(input.threadId, [
+            "runtimeRequests",
+          ]);
+          const canSeeApprovals =
+            allowChildApprovals &&
+            caller !== undefined &&
+            (yield* isOwnedSubagentOf(threads, caller.id, projection.thread));
           return {
             requestIds: projection.runtimeRequests
-              .filter((request) => request.kind === "user_input" && request.status === "pending")
+              .filter(
+                (request) =>
+                  request.status === "pending" &&
+                  (request.kind === "user_input" ||
+                    (canSeeApprovals &&
+                      isApprovalKind(request.kind) &&
+                      request.responseCapability.type === "live")),
+              )
               .map((request) => request.id),
           };
         }
         const requestId = yield* required(input.requestId, "requestId");
-        const { item } = yield* readQuestion({ threadId: input.threadId, requestId });
-        return { requestId, questions: item.questions };
+        const { caller, threads, projection } = yield* readThread(
+          input.threadId,
+          ["runtimeRequests", "turnItems"],
+          { turnItemTypes: ["user_input_request", "approval_request"] },
+        );
+        const request = projection.runtimeRequests.find((candidate) => candidate.id === requestId);
+        if (request !== undefined && isApprovalKind(request.kind)) {
+          if (
+            !allowChildApprovals ||
+            caller === undefined ||
+            !(yield* isOwnedSubagentOf(threads, caller.id, projection.thread))
+          ) {
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: "The pending user-input request was not found.",
+            });
+          }
+          if (request.status !== "pending") {
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message:
+                request.status === "resolved"
+                  ? "The approval request was already resolved."
+                  : `The approval request is no longer pending (${request.status}).`,
+            });
+          }
+          if (request.responseCapability.type !== "live") {
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message:
+                request.responseCapability.type === "not_resumable"
+                  ? request.responseCapability.reason
+                  : "This approval request cannot be answered live.",
+            });
+          }
+          const item = projection.turnItems.find(
+            (candidate) =>
+              candidate.type === "approval_request" && candidate.requestId === requestId,
+          );
+          return {
+            requestId,
+            kind: request.kind,
+            ...(item?.type === "approval_request" && item.prompt !== undefined
+              ? { prompt: item.prompt }
+              : {}),
+            ...(item?.type === "approval_request" && item.reason !== undefined
+              ? { reason: item.reason }
+              : {}),
+            ...(item?.type === "approval_request" && item.appName !== undefined
+              ? { appName: item.appName }
+              : {}),
+          };
+        }
+        const questionItem = projection.turnItems.find(
+          (candidate) =>
+            candidate.type === "user_input_request" && candidate.requestId === requestId,
+        );
+        if (request?.kind !== "user_input" || questionItem?.type !== "user_input_request") {
+          return yield* new OrchestratorMcpFailure({
+            code: "invalid_request",
+            message: "The pending user-input request was not found.",
+          });
+        }
+        if (request.status !== "pending") {
+          return yield* new OrchestratorMcpFailure({
+            code: "invalid_request",
+            message:
+              request.status === "resolved"
+                ? "The user-input request was already answered."
+                : `The user-input request is no longer pending (${request.status}).`,
+          });
+        }
+        return { requestId, questions: questionItem.questions };
       }),
     ),
     writesThread((input) =>
       Effect.gen(function* () {
         const requestId = yield* required(input.requestId, "requestId");
+        if (input.decision !== undefined) {
+          if (input.answers !== undefined) {
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: "Pass either `answers` or `decision`, not both.",
+            });
+          }
+          if (!(yield* parentAgentCanApproveSubagents())) {
+            return yield* new OrchestratorMcpFailure({
+              code: "capability_denied",
+              message:
+                "Parent agents cannot approve permission requests unless enabled in Settings.",
+            });
+          }
+          const { caller, threads, projection } = yield* readThread(input.threadId, [
+            "runtimeRequests",
+          ]);
+          if (
+            caller === undefined ||
+            !(yield* isOwnedSubagentOf(threads, caller.id, projection.thread))
+          ) {
+            return yield* new OrchestratorMcpFailure({
+              code: "capability_denied",
+              message:
+                "A thread can only approve or decline permission requests on its own delegated subagent threads.",
+            });
+          }
+          const request = projection.runtimeRequests.find(
+            (candidate) => candidate.id === requestId && isApprovalKind(candidate.kind),
+          );
+          if (request === undefined) {
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: "The pending approval request was not found.",
+            });
+          }
+          if (request.status !== "pending") {
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message:
+                request.status === "resolved"
+                  ? "The approval request was already resolved."
+                  : `The approval request is no longer pending (${request.status}).`,
+            });
+          }
+          if (request.responseCapability.type !== "live") {
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message:
+                request.responseCapability.type === "not_resumable"
+                  ? request.responseCapability.reason
+                  : "This approval request cannot be answered live.",
+            });
+          }
+          const result = yield* threads
+            .dispatch({
+              type: "runtime-request.respond",
+              threadId: projection.thread.id,
+              commandId: yield* newCommandId(),
+              requestId,
+              decision: input.decision,
+            })
+            .pipe(Effect.mapError(dispatchFailure));
+          return { sequence: result.sequence };
+        }
         const answers = yield* required(input.answers, "answers");
         const { threads, projection } = yield* readQuestion({
           threadId: input.threadId,
