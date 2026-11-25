@@ -157,6 +157,11 @@ describe("AntigravityAdapterV2 flavor", () => {
       outcome: { outcome: "selected", optionId: "opt-dev" },
     });
   });
+
+  it("defers optional T3 MCP tools over HTTP", () => {
+    assert.isTrue(flavor.mcpOverHttp);
+    assert.isTrue(flavor.deferMcpTools);
+  });
 });
 
 const layerSession = Layer.mergeAll(
