@@ -12,12 +12,14 @@ import { mcpToolSession, runAcpMcpCliFastPath, runAcpMcpStdioBridge } from "./Ac
 function makeHarness(
   responder: (request: Request) => Promise<Response> | Response,
   input = new NodeStream.PassThrough(),
+  options?: { readonly toolExposure?: string },
 ) {
   const written: Array<string> = [];
   const requests: Array<{ readonly headers: Headers; readonly body: string }> = [];
   const bridge = runAcpMcpStdioBridge({
     endpoint: "http://127.0.0.1:1/mcp",
     authorization: "Bearer bridge-test",
+    ...(options?.toolExposure === undefined ? {} : { toolExposure: options.toolExposure }),
     input,
     output: {
       write: (chunk: string) => {
@@ -162,8 +164,30 @@ describe("AcpMcpStdioBridge", () => {
       expect(JSON.parse(written[0]!)).toMatchObject({ id: 1 });
       expect(JSON.parse(written[1]!)).toMatchObject({ id: 2, result: { ok: true } });
       expect(requests[0]?.headers.get("authorization")).toBe("Bearer bridge-test");
+      expect(requests[0]?.headers.get("t3-tool-exposure")).toBeNull();
       expect(requests[1]?.headers.get("mcp-session-id")).toBe("session-42");
       expect(requests[1]?.headers.get("mcp-protocol-version")).toBe("2025-06-18");
+    }),
+  );
+
+  it.effect("forwards t3-tool-exposure when configured for deferred listing", () =>
+    Effect.gen(function* () {
+      const { input, requests, bridge } = makeHarness(
+        () =>
+          new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools: [] } }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        undefined,
+        { toolExposure: "deferred" },
+      );
+      const fiber = yield* Effect.forkChild(bridge);
+
+      input.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" })}\n`);
+      input.end();
+      yield* Fiber.join(fiber);
+
+      expect(requests[0]?.headers.get("t3-tool-exposure")).toBe("deferred");
     }),
   );
 
