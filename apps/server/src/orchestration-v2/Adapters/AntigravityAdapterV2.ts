@@ -222,6 +222,8 @@ export function makeAntigravityAcpAdapterFlavor(
     supportsNativeGoals: options.supportsNativeGoals ?? Effect.succeed(false),
     // Agents that advertise HTTP MCP skip the stdio bridge process; others keep stdio.
     mcpOverHttp: true,
+    // shortcut: agy forces ACP MCP servers eager and hard-drops the largest tools past its 20k-token customization budget; revert once agy stops forcing eager or demotes overflow to lazy.
+    deferMcpTools: true,
     sessionCarriesPullRequestLinking: antigravityAppendsSystemPrompt,
     makeRuntime,
     buildAttachmentPrompt: ({ text, attachments, resolveAttachmentPath, promptCapabilities }) =>
