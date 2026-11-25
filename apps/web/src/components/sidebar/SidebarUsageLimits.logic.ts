@@ -49,11 +49,8 @@ export function sidebarLimitColumns(
 }
 
 /**
- * One entry per provider with usable limits, pooled across accounts and
- * environments exactly as Usage → Limits pools them, reduced to the number
- * the sidebar has room for: the share left in the most constrained window.
- * Providers sort by driver so the pill keeps a stable reading order across
- * sessions. `now` only feeds the pace maths the pill does not show.
+ * One entry per provider with usable limits, pooled like Usage → Limits and sorted by driver.
+ * `now` only feeds the pace maths the pill does not show.
  */
 export function collectSidebarLimits(
   presentations: Parameters<typeof collectLimitAccounts>[0],
