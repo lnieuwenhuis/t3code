@@ -12359,10 +12359,6 @@
   "b6be43c36bab124c": "Update server to map models",
   "1eee306da7eb0382": "Could not save. Try again.",
   "c8fa587fc0be1938": "Limits",
-  "14955bff9f2f90cd": "Past 24h",
-  "2cddd6095abc734a": "7 days",
-  "53493056306708cf": "30 days",
-  "c719359d18d37ad3": "90 days",
   "8367779e149f723b": "Primary environment request failed during {operation} (HTTP {status}).",
   "c5cd027743a2b5a6": "Invalid pairing token. Check the token and try again.",
   "0e4b49c8203aae81": "Timed out waiting for authenticated session after bootstrap.",
@@ -12484,5 +12480,15 @@
   "b7df38b7d8792d78": "Open guide",
   "9e91e9a77b664e4e": "Could not start a review guide",
   "d8aaf932f90429c4": "Move this command to the front of the queue ({shortcut})",
-  "425ab15036aec8a4": "Move this command to the front of the queue"
+  "425ab15036aec8a4": "Move this command to the front of the queue",
+  "d7402c42567e2624": "Usage: Period: Past 5h",
+  "8814a8e6b5abeae8": "Usage: Period: Past 12h",
+  "689018977cd8dde9": "Usage: Period: 180 days",
+  "098549c08bf45d23": "5h",
+  "af4bf3c8cde6720c": "12h",
+  "e4d8f24f51cb20b2": "24h",
+  "0844acc394bc9316": "7d",
+  "cc0963671e0f7d45": "30d",
+  "1fffffb1a1de7b75": "90d",
+  "8f126b32d299db76": "180d"
 }

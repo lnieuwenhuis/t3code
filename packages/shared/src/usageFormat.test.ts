@@ -2,7 +2,13 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { UsageSource } from "@t3tools/contracts";
 
-import { formatHourShort, formatTokens, makeWindow, usageSourceMessages } from "./usageFormat.ts";
+import {
+  formatHourShort,
+  formatTokens,
+  makeUsageWindow,
+  makeWindow,
+  usageSourceMessages,
+} from "./usageFormat.ts";
 
 function malformedSource(count: number, overrides: Partial<UsageSource> = {}): UsageSource {
   return {
@@ -152,12 +158,36 @@ describe("hourly usage formatting", () => {
     );
   });
 
-  it("builds an exact minute-aligned 24-hour request", () => {
-    const window = makeWindow(1, new Date("2026-08-11T12:37:42.123Z"), "hour");
+  it.each([
+    {
+      id: "5h" as const,
+      sinceTime: "2026-08-11T07:37:00.000Z",
+      untilTime: "2026-08-11T12:37:00.000Z",
+    },
+    {
+      id: "12h" as const,
+      sinceTime: "2026-08-11T00:37:00.000Z",
+      untilTime: "2026-08-11T12:37:00.000Z",
+    },
+    {
+      id: "24h" as const,
+      sinceTime: "2026-08-10T12:37:00.000Z",
+      untilTime: "2026-08-11T12:37:00.000Z",
+    },
+  ])("builds an exact minute-aligned $id request", ({ id, sinceTime, untilTime }) => {
+    const window = makeUsageWindow(id, new Date("2026-08-11T12:37:42.123Z"));
 
     expect(window.resolution).toBe("hour");
-    expect(window.sinceTime).toBe("2026-08-10T12:37:00.000Z");
-    expect(window.untilTime).toBe("2026-08-11T12:37:00.000Z");
+    expect(window.sinceTime).toBe(sinceTime);
+    expect(window.untilTime).toBe(untilTime);
+  });
+
+  it("builds a 180-day daily request", () => {
+    const window = makeUsageWindow("180d", new Date("2026-08-11T12:37:42.123Z"));
+
+    expect(window.resolution).toBe("day");
+    expect(window.sinceDay).toBe("2026-02-13");
+    expect(window.untilDay).toBe("2026-08-11");
   });
 
   it("degrades an unknown resolved zone to UTC instead of crashing", () => {
@@ -169,7 +199,7 @@ describe("hourly usage formatting", () => {
     try {
       const now = new Date("2026-08-11T12:37:42.123Z");
 
-      expect(makeWindow(1, now, "hour").timeZone).toBe("UTC");
+      expect(makeWindow(24, now, "hour").timeZone).toBe("UTC");
       expect(makeWindow(30, now).timeZone).toBe("UTC");
     } finally {
       resolvedOptions.mockRestore();

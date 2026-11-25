@@ -12344,10 +12344,6 @@
   "b6be43c36bab124c": "Actualiza el servidor para asignar modelos",
   "1eee306da7eb0382": "No se pudo guardar. Inténtalo de nuevo.",
   "c8fa587fc0be1938": "Límites",
-  "14955bff9f2f90cd": "Últimas 24 h",
-  "2cddd6095abc734a": "7 días",
-  "53493056306708cf": "30 días",
-  "c719359d18d37ad3": "90 días",
   "8367779e149f723b": "Falló una solicitud al entorno principal durante {operation} (HTTP {status}).",
   "c5cd027743a2b5a6": "El token de emparejamiento no es válido. Revísalo e inténtalo de nuevo.",
   "0e4b49c8203aae81": "Se agotó el tiempo de espera de la sesión autenticada tras el arranque.",
@@ -12470,5 +12466,15 @@
   "b7df38b7d8792d78": "Abrir guía",
   "9e91e9a77b664e4e": "No se pudo iniciar una guía de revisión",
   "d8aaf932f90429c4": "Mover este comando al principio de la cola ({shortcut})",
-  "425ab15036aec8a4": "Mover este comando al principio de la cola"
+  "425ab15036aec8a4": "Mover este comando al principio de la cola",
+  "d7402c42567e2624": "Uso: periodo: últimas 5 h",
+  "8814a8e6b5abeae8": "Uso: periodo: últimas 12 h",
+  "689018977cd8dde9": "Uso: periodo: 180 días",
+  "098549c08bf45d23": "5 h",
+  "af4bf3c8cde6720c": "12 h",
+  "e4d8f24f51cb20b2": "24 h",
+  "0844acc394bc9316": "7 d",
+  "cc0963671e0f7d45": "30 d",
+  "1fffffb1a1de7b75": "90 d",
+  "8f126b32d299db76": "180 d"
 }

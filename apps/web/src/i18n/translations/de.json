@@ -12351,10 +12351,6 @@
   "b6be43c36bab124c": "Server aktualisieren, um Modelle zuzuordnen",
   "1eee306da7eb0382": "Speichern fehlgeschlagen. Versuch es erneut.",
   "c8fa587fc0be1938": "Limits",
-  "14955bff9f2f90cd": "Letzte 24 Std.",
-  "2cddd6095abc734a": "7 Tage",
-  "53493056306708cf": "30 Tage",
-  "c719359d18d37ad3": "90 Tage",
   "8367779e149f723b": "Anfrage an die primäre Umgebung während {operation} fehlgeschlagen (HTTP {status}).",
   "c5cd027743a2b5a6": "Ungültiges Kopplungstoken. Prüfe das Token und versuch es erneut.",
   "0e4b49c8203aae81": "Zeitüberschreitung beim Warten auf eine authentifizierte Sitzung nach dem Bootstrap.",
@@ -12475,5 +12471,15 @@
   "b7df38b7d8792d78": "Leitfaden öffnen",
   "9e91e9a77b664e4e": "Review-Leitfaden konnte nicht gestartet werden",
   "d8aaf932f90429c4": "Diesen Befehl an den Anfang der Warteschlange verschieben ({shortcut})",
-  "425ab15036aec8a4": "Diesen Befehl an den Anfang der Warteschlange verschieben"
+  "425ab15036aec8a4": "Diesen Befehl an den Anfang der Warteschlange verschieben",
+  "d7402c42567e2624": "Nutzung: Zeitraum: Letzte 5 Std.",
+  "8814a8e6b5abeae8": "Nutzung: Zeitraum: Letzte 12 Std.",
+  "689018977cd8dde9": "Nutzung: Zeitraum: 180 Tage",
+  "098549c08bf45d23": "5 Std.",
+  "af4bf3c8cde6720c": "12 Std.",
+  "e4d8f24f51cb20b2": "24 Std.",
+  "0844acc394bc9316": "7 T.",
+  "cc0963671e0f7d45": "30 T.",
+  "1fffffb1a1de7b75": "90 T.",
+  "8f126b32d299db76": "180 T."
 }

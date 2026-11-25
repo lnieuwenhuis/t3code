@@ -28,51 +28,66 @@ afterEach(() => {
 });
 
 describe("Usage page preferences", () => {
-  it("round-trips hidden providers and reads older saves without them", () => {
-    saveUsagePagePreferences({ metric: "cost", windowDays: 7, hiddenProviders: ["codex"] });
-    expect(readUsagePagePreferences().hiddenProviders).toEqual(["codex"]);
+  it("round-trips hidden providers and new windows, and reads legacy windowDays saves", () => {
+    saveUsagePagePreferences({ metric: "cost", window: "5h", hiddenProviders: ["codex"] });
+    expect(readUsagePagePreferences()).toEqual({
+      metric: "cost",
+      window: "5h",
+      hiddenProviders: ["codex"],
+    });
+
+    saveUsagePagePreferences({ metric: "tokens", window: "180d" });
+    expect(readUsagePagePreferences()).toEqual({ metric: "tokens", window: "180d" });
 
     values.set(key, '{"metric":"tokens","windowDays":30}');
-    expect(readUsagePagePreferences()).toEqual({ metric: "tokens", windowDays: 30 });
+    expect(readUsagePagePreferences()).toEqual({ metric: "tokens", window: "30d" });
+
+    values.set(key, '{"metric":"cost","windowDays":1,"hiddenProviders":["claude"]}');
+    expect(readUsagePagePreferences()).toEqual({
+      metric: "cost",
+      window: "24h",
+      hiddenProviders: ["claude"],
+    });
   });
 
   // regression: #10189 an invalid saved usage selection was never replaced
   it.each([
     "not-json",
-    '{"metric":"unknown","windowDays":7}',
+    '{"metric":"unknown","window":"7d"}',
+    '{"metric":"cost","window":"365d"}',
     '{"metric":"cost","windowDays":365}',
   ])("replaces invalid preferences on the next save: %s", (value) => {
     values.set(key, value);
-    expect(readUsagePagePreferences()).toEqual({ metric: "limits", windowDays: 30 });
-    saveUsagePagePreferences({ metric: "tokens", windowDays: 7 });
-    expect(readUsagePagePreferences()).toEqual({ metric: "tokens", windowDays: 7 });
+    expect(readUsagePagePreferences()).toEqual({ metric: "limits", window: "30d" });
+    saveUsagePagePreferences({ metric: "tokens", window: "12h" });
+    expect(readUsagePagePreferences()).toEqual({ metric: "tokens", window: "12h" });
   });
 
   it("contains write failures and can save again after storage recovers", () => {
-    saveUsagePagePreferences({ metric: "cost", windowDays: 30 });
+    saveUsagePagePreferences({ metric: "cost", window: "30d" });
     const write = vi.spyOn(storage, "setItem").mockImplementation(() => {
       throw new Error("QuotaExceededError");
     });
-    expect(() => saveUsagePagePreferences({ metric: "tokens", windowDays: 7 })).not.toThrow();
-    expect(readUsagePagePreferences()).toEqual({ metric: "cost", windowDays: 30 });
+    expect(() => saveUsagePagePreferences({ metric: "tokens", window: "7d" })).not.toThrow();
+    expect(readUsagePagePreferences()).toEqual({ metric: "cost", window: "30d" });
     write.mockRestore();
-    saveUsagePagePreferences({ metric: "limits", windowDays: 7 });
-    expect(readUsagePagePreferences()).toEqual({ metric: "limits", windowDays: 7 });
+    saveUsagePagePreferences({ metric: "limits", window: "7d" });
+    expect(readUsagePagePreferences()).toEqual({ metric: "limits", window: "7d" });
   });
 
   it("tells subscribers about every save until they unsubscribe", () => {
     const seen: unknown[] = [];
     const unsubscribe = subscribeUsagePagePreferences((preferences) => seen.push(preferences));
-    saveUsagePagePreferences({ metric: "limits", windowDays: 7 });
+    saveUsagePagePreferences({ metric: "limits", window: "7d" });
     vi.spyOn(storage, "setItem").mockImplementation(() => {
       throw new Error("QuotaExceededError");
     });
-    saveUsagePagePreferences({ metric: "tokens", windowDays: 1 });
+    saveUsagePagePreferences({ metric: "tokens", window: "24h" });
     unsubscribe();
-    saveUsagePagePreferences({ metric: "cost", windowDays: 30 });
+    saveUsagePagePreferences({ metric: "cost", window: "30d" });
     expect(seen).toEqual([
-      { metric: "limits", windowDays: 7 },
-      { metric: "tokens", windowDays: 1 },
+      { metric: "limits", window: "7d" },
+      { metric: "tokens", window: "24h" },
     ]);
   });
 
@@ -82,7 +97,7 @@ describe("Usage page preferences", () => {
         throw new Error("SecurityError");
       },
     });
-    expect(readUsagePagePreferences()).toEqual({ metric: "limits", windowDays: 30 });
-    expect(() => saveUsagePagePreferences({ metric: "tokens", windowDays: 7 })).not.toThrow();
+    expect(readUsagePagePreferences()).toEqual({ metric: "limits", window: "30d" });
+    expect(() => saveUsagePagePreferences({ metric: "tokens", window: "7d" })).not.toThrow();
   });
 });

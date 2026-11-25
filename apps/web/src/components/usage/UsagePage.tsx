@@ -51,7 +51,8 @@ import {
   formatPercent,
   formatTokens,
   formatUsd,
-  makeWindow,
+  makeUsageWindow,
+  type UsageWindowId,
 } from "@t3tools/shared/usageFormat";
 import { formatUsageContractMismatch, usageSourceMessages } from "@t3tools/shared/usageFormatCopy";
 import { Button, InlineButton } from "../ui/button";
@@ -112,8 +113,8 @@ function isUsageMetric(value: string | null | undefined): value is UsageMetric {
   return METRIC_OPTIONS.some((option) => option.value === value);
 }
 
-function isUsageWindowDays(value: number): value is UsagePagePreferences["windowDays"] {
-  return WINDOW_OPTIONS.some((option) => option.days === value);
+function isUsageWindowId(value: string | null | undefined): value is UsageWindowId {
+  return WINDOW_OPTIONS.some((option) => option.id === value);
 }
 
 const providerLabel = (provider: UsageProviderKind) => PROVIDER_PRESENTATION[provider].label;
@@ -193,12 +194,8 @@ export function UsagePage() {
       : m(option.label);
   };
   const [windowSelection, setWindowSelection] = useState(() => ({
-    days: preferences.windowDays,
-    window: makeWindow(
-      preferences.windowDays,
-      undefined,
-      preferences.windowDays === 1 ? "hour" : "day",
-    ),
+    id: preferences.window,
+    window: makeUsageWindow(preferences.window),
   }));
   // Something else may pick the metric while this page is mounted, such as
   // the sidebar's limits pill; its save lands here instead of being lost.
@@ -208,15 +205,11 @@ export function UsagePage() {
       subscribeUsagePagePreferences((next) => {
         setPreferences(next);
         setWindowSelection((current) =>
-          current.days === next.windowDays
+          current.id === next.window
             ? current
             : {
-                days: next.windowDays,
-                window: makeWindow(
-                  next.windowDays,
-                  undefined,
-                  next.windowDays === 1 ? "hour" : "day",
-                ),
+                id: next.window,
+                window: makeUsageWindow(next.window),
               },
         );
       }),
@@ -231,8 +224,7 @@ export function UsagePage() {
   const [selectedEnvironmentIds, setSelectedEnvironmentIds] =
     useState<ReadonlySet<EnvironmentId> | null>(null);
   const hiddenProviders = new Set(preferences.hiddenProviders);
-  const { days: windowDays, window } = windowSelection;
-  const isPast24Hours = windowDays === 1;
+  const { id: windowId, window } = windowSelection;
   const {
     merged: answeredUsage,
     environments,
@@ -263,12 +255,12 @@ export function UsagePage() {
     setPreferences(nextPreferences);
     saveUsagePagePreferences(nextPreferences);
   };
-  const selectWindow = (days: number) => {
-    if (!isUsageWindowDays(days)) return;
-    updatePreferences({ windowDays: days });
+  const selectWindow = (id: string | null | undefined) => {
+    if (!isUsageWindowId(id)) return;
+    updatePreferences({ window: id });
     setWindowSelection({
-      days,
-      window: makeWindow(days, undefined, days === 1 ? "hour" : "day"),
+      id,
+      window: makeUsageWindow(id),
     });
   };
   const selectMetric = (nextMetric: UsageMetric) => {
@@ -312,7 +304,7 @@ export function UsagePage() {
     event.preventDefault();
     event.stopPropagation();
     if (metricOption) selectMetric(metricOption.value);
-    if (periodOption && !showingLimits) selectWindow(periodOption.days);
+    if (periodOption && !showingLimits) selectWindow(periodOption.id);
   });
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- window capture keydown listener for usage metric and period shortcuts
@@ -333,14 +325,14 @@ export function UsagePage() {
       });
       return;
     }
-    const nextWindow = makeWindow(windowDays, undefined, isPast24Hours ? "hour" : "day");
+    const nextWindow = makeUsageWindow(windowId);
     if (
       nextWindow.sinceDay !== window.sinceDay ||
       nextWindow.untilDay !== window.untilDay ||
       nextWindow.sinceTime !== window.sinceTime ||
       nextWindow.untilTime !== window.untilTime
     ) {
-      setWindowSelection({ days: windowDays, window: nextWindow });
+      setWindowSelection({ id: windowId, window: nextWindow });
     }
     refreshingRef.current = true;
     setIsRefreshing(true);
@@ -390,7 +382,7 @@ export function UsagePage() {
           start: formatDayShort(shownWindow.sinceDay, locale),
           end: formatDayShort(shownWindow.untilDay, locale),
         });
-  const windowOptionLabel = WINDOW_OPTIONS.find((option) => option.days === windowDays)?.label;
+  const windowOptionLabel = WINDOW_OPTIONS.find((option) => option.id === windowId)?.label;
   const metricOptionLabel = METRIC_OPTIONS.find((option) => option.value === metric)?.label;
   const topbarContent = (
     <div className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 py-2 @4xl/usage-header:flex">
@@ -435,14 +427,14 @@ export function UsagePage() {
           <ToggleGroup
             aria-label={gt("Usage period")}
             variant="segmented"
-            value={[String(windowDays)]}
+            value={[windowId]}
             onValueChange={(next) => {
               const value = next[0];
-              if (value) selectWindow(Number(value));
+              if (value) selectWindow(value);
             }}
           >
             {WINDOW_OPTIONS.map((option) => (
-              <Toggle key={option.days} value={String(option.days)} title={shortcutTitle(option)}>
+              <Toggle key={option.id} value={option.id} title={shortcutTitle(option)}>
                 {m(option.label)}
               </Toggle>
             ))}
@@ -476,7 +468,7 @@ export function UsagePage() {
       </div>
       <div className="ms-auto flex shrink-0 items-center justify-end gap-1 @4xl/usage-header:hidden">
         {showingLimits ? null : (
-          <Select value={String(windowDays)} onValueChange={(value) => selectWindow(Number(value))}>
+          <Select value={windowId} onValueChange={selectWindow}>
             <SelectTrigger
               aria-label={gt("Usage period")}
               size="compact"
@@ -487,11 +479,7 @@ export function UsagePage() {
             </SelectTrigger>
             <SelectPopup align="end" alignItemWithTrigger={false}>
               {WINDOW_OPTIONS.map((option) => (
-                <SelectItem
-                  key={option.days}
-                  value={String(option.days)}
-                  title={shortcutTitle(option)}
-                >
+                <SelectItem key={option.id} value={option.id} title={shortcutTitle(option)}>
                   {m(option.label)}
                 </SelectItem>
               ))}
