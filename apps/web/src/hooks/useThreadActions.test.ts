@@ -45,12 +45,8 @@ describe("resolveThreadDeleteTarget", () => {
   });
 
   it("falls back to a live fetch and resolves the thread when the fetch finds it (t3code#9085)", async () => {
-    // Archived threads are excluded from the main shell store
-    // (`listActiveThreadRows`), so deleting one from Settings → Archived
-    // must still resolve a thread — otherwise the worktree-cleanup path in
-    // deleteThread never runs and the worktree is silently orphaned. There's
-    // no synchronous archived cache to try first (it's only warm while the
-    // archived panel is open), so this must always be a live fetch.
+    // Archived threads are absent from the main shell store and have no synchronous cache,
+    // so deleting from Settings → Archived must live-fetch to run worktree cleanup.
     const result = await resolveThreadDeleteTarget({
       target,
       resolveActive: () => null,

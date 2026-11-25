@@ -2,9 +2,10 @@ import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { Cause } from "effect";
 import { AsyncResult } from "effect/reactivity";
-import { act, StrictMode } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { StrictMode } from "react";
+import { describe, expect, it, vi } from "vite-plus/test";
+
+import { act, fakeTimers, render as renderUi } from "../../../test/render";
 
 const { invalidate, notify } = vi.hoisted(() => ({ invalidate: vi.fn(), notify: vi.fn() }));
 vi.mock("~/state/pullRequests", () => ({ pullRequestEnvironment: { invalidate: {} } }));
@@ -14,12 +15,6 @@ vi.mock("../ui/toast", () => ({ toastManager: { add: notify } }));
 import { usePullRequestRefresh } from "./usePullRequestRefresh";
 
 type Props = Parameters<typeof usePullRequestRefresh>[0];
-const refreshMetadata = vi.fn();
-const refreshActivity = vi.fn();
-const refreshDetail = vi.fn();
-let renderer: Root | null;
-let container: HTMLDivElement;
-let props: Props;
 let testNumber = 0;
 
 function PanelReads(input: Props) {
@@ -32,23 +27,6 @@ function PanelReads(input: Props) {
       </button>
     </>
   );
-}
-
-async function render(changes: Partial<Props> = {}) {
-  props = { ...props, ...changes };
-  await act(async () => {
-    const panel = (
-      <StrictMode>
-        <PanelReads {...props} />
-      </StrictMode>
-    );
-    renderer ??= createRoot(container);
-    renderer.render(panel);
-  });
-}
-
-function diffRefreshes() {
-  return container.querySelector("output")!.textContent;
 }
 
 function invalidation() {
@@ -67,18 +45,16 @@ async function poll() {
   await act(async () => vi.advanceTimersByTimeAsync(5 * 60_000));
 }
 
-beforeEach(() => {
-  renderer = null;
-  container = document.createElement("div");
-  vi.useFakeTimers();
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+async function mountPanel() {
+  const timers = fakeTimers();
+  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  const refreshMetadata = vi.fn();
+  const refreshActivity = vi.fn();
+  const refreshDetail = vi.fn();
   invalidate.mockReset().mockResolvedValue(AsyncResult.success(undefined));
   notify.mockReset();
-  refreshMetadata.mockReset();
-  refreshActivity.mockReset();
-  refreshDetail.mockReset();
-  props = {
+
+  let props: Props = {
     environmentId: EnvironmentId.make("environment"),
     reference: {
       projectId: ProjectId.make("project"),
@@ -93,211 +69,250 @@ beforeEach(() => {
     refreshDetail,
     forcedRefreshToken: 0,
   };
-});
 
-afterEach(async () => {
-  await act(async () => renderer?.unmount());
-  vi.restoreAllMocks();
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
-});
+  const screen = await renderUi(
+    <StrictMode>
+      <PanelReads {...props} />
+    </StrictMode>,
+    { router: false },
+  );
+
+  let mounted = true;
+  const rerender = async (changes: Partial<Props> = {}) => {
+    props = { ...props, ...changes };
+    await screen.rerender(
+      <StrictMode>
+        <PanelReads {...props} />
+      </StrictMode>,
+    );
+  };
+  const unmount = async () => {
+    mounted = false;
+    await screen.unmount();
+  };
+
+  return {
+    get props() {
+      return props;
+    },
+    get mounted() {
+      return mounted;
+    },
+    container: screen.container,
+    refreshMetadata,
+    refreshActivity,
+    refreshDetail,
+    diffRefreshes: () => screen.container.querySelector("output")!.textContent,
+    rerender,
+    unmount,
+    async [Symbol.asyncDispose]() {
+      try {
+        await screen[Symbol.asyncDispose]();
+      } finally {
+        visibility.mockRestore();
+        timers[Symbol.dispose]();
+      }
+    },
+  };
+}
 
 describe("mounted pull request refresh sequencing", () => {
   it("waits for an existing activity read before refreshing a changed revision", async () => {
-    await render();
-    await render({ detail: { updatedAt: "2026-09-10T11:00:00Z" }, activityIsPending: true });
+    await using panel = await mountPanel();
+    await panel.rerender({
+      detail: { updatedAt: "2026-09-10T11:00:00Z" },
+      activityIsPending: true,
+    });
     expect(invalidate).not.toHaveBeenCalled();
-    expect(refreshActivity).not.toHaveBeenCalled();
-    await render({ activityIsPending: false });
+    expect(panel.refreshActivity).not.toHaveBeenCalled();
+    await panel.rerender({ activityIsPending: false });
     expect(invalidate).toHaveBeenCalledOnce();
-    expect(refreshActivity).toHaveBeenCalledOnce();
-    expect(diffRefreshes()).toBe("1");
+    expect(panel.refreshActivity).toHaveBeenCalledOnce();
+    expect(panel.diffRefreshes()).toBe("1");
   });
 
   it("awaits detail-only poll invalidation and preserves activity and diff for unchanged metadata", async () => {
-    await render();
+    await using panel = await mountPanel();
     expect(invalidate).not.toHaveBeenCalled();
     const pending = invalidation();
     await poll();
     expect(invalidate).toHaveBeenCalledExactlyOnceWith({
-      environmentId: props.environmentId,
-      input: { reference: props.reference, scope: "detail" },
+      environmentId: panel.props.environmentId,
+      input: { reference: panel.props.reference, scope: "detail" },
     });
-    expect(refreshMetadata).not.toHaveBeenCalled();
-    expect(refreshActivity).not.toHaveBeenCalled();
-    expect(diffRefreshes()).toBe("0");
+    expect(panel.refreshMetadata).not.toHaveBeenCalled();
+    expect(panel.refreshActivity).not.toHaveBeenCalled();
+    expect(panel.diffRefreshes()).toBe("0");
     await pending.succeed();
-    expect(refreshMetadata).toHaveBeenCalledOnce();
-    await render({ detail: { ...props.detail! } });
-    expect(refreshActivity).not.toHaveBeenCalled();
-    expect(diffRefreshes()).toBe("0");
+    expect(panel.refreshMetadata).toHaveBeenCalledOnce();
+    await panel.rerender({ detail: { ...panel.props.detail! } });
+    expect(panel.refreshActivity).not.toHaveBeenCalled();
+    expect(panel.diffRefreshes()).toBe("0");
   });
 
   it("awaits full invalidation of a polled revision before refreshing activity and the diff", async () => {
-    await render();
+    await using panel = await mountPanel();
     await poll();
-    expect(refreshMetadata).toHaveBeenCalledOnce();
+    expect(panel.refreshMetadata).toHaveBeenCalledOnce();
     const pending = invalidation();
-    await render({ detail: { updatedAt: "2026-09-10T10:01:00Z" } });
+    await panel.rerender({ detail: { updatedAt: "2026-09-10T10:01:00Z" } });
     expect(invalidate).toHaveBeenLastCalledWith({
-      environmentId: props.environmentId,
-      input: { reference: props.reference },
+      environmentId: panel.props.environmentId,
+      input: { reference: panel.props.reference },
     });
-    expect(refreshActivity).not.toHaveBeenCalled();
-    expect(diffRefreshes()).toBe("0");
+    expect(panel.refreshActivity).not.toHaveBeenCalled();
+    expect(panel.diffRefreshes()).toBe("0");
     await pending.succeed();
-    expect(refreshActivity).toHaveBeenCalledOnce();
-    expect(diffRefreshes()).toBe("1");
+    expect(panel.refreshActivity).toHaveBeenCalledOnce();
+    expect(panel.diffRefreshes()).toBe("1");
   });
 
   it("ignores a completed invalidation superseded by a newer revision", async () => {
-    await render();
+    await using panel = await mountPanel();
     const earlier = invalidation();
-    await render({ detail: { updatedAt: "2026-09-10T10:01:00Z" } });
+    await panel.rerender({ detail: { updatedAt: "2026-09-10T10:01:00Z" } });
     const latest = invalidation();
-    await render({ detail: { updatedAt: "2026-09-10T10:02:00Z" } });
+    await panel.rerender({ detail: { updatedAt: "2026-09-10T10:02:00Z" } });
     await earlier.succeed();
-    expect(refreshActivity).not.toHaveBeenCalled();
-    expect(diffRefreshes()).toBe("0");
+    expect(panel.refreshActivity).not.toHaveBeenCalled();
+    expect(panel.diffRefreshes()).toBe("0");
     await latest.succeed();
-    expect(refreshActivity).toHaveBeenCalledOnce();
-    expect(diffRefreshes()).toBe("1");
+    expect(panel.refreshActivity).toHaveBeenCalledOnce();
+    expect(panel.diffRefreshes()).toBe("1");
   });
 
   it("ignores a revision invalidation after selecting another pull request", async () => {
-    await render();
+    await using panel = await mountPanel();
     const pending = invalidation();
-    await render({ detail: { updatedAt: "2026-09-10T10:01:00Z" } });
-    await render({
-      reference: { ...props.reference, number: 8 },
-      scopeKey: `${props.scopeKey}:other`,
+    await panel.rerender({ detail: { updatedAt: "2026-09-10T10:01:00Z" } });
+    await panel.rerender({
+      reference: { ...panel.props.reference, number: 8 },
+      scopeKey: `${panel.props.scopeKey}:other`,
     });
     await pending.succeed();
-    expect(refreshActivity).not.toHaveBeenCalled();
-    expect(diffRefreshes()).toBe("0");
+    expect(panel.refreshActivity).not.toHaveBeenCalled();
+    expect(panel.diffRefreshes()).toBe("0");
   });
 
   it("does not refresh activity after the panel unmounts during invalidation", async () => {
-    await render();
+    await using panel = await mountPanel();
     const pending = invalidation();
-    await render({ detail: { updatedAt: "2026-09-10T10:01:00Z" } });
-    await act(async () => renderer!.unmount());
-    renderer = null;
+    await panel.rerender({ detail: { updatedAt: "2026-09-10T10:01:00Z" } });
+    await panel.unmount();
     await pending.succeed();
-    expect(refreshActivity).not.toHaveBeenCalled();
+    expect(panel.refreshActivity).not.toHaveBeenCalled();
   });
 
   it("keeps activity and diff on failed revision invalidation and retries on the next metadata result", async () => {
-    await render();
+    await using panel = await mountPanel();
     const pending = invalidation();
-    await render({ detail: { updatedAt: "2026-09-10T10:01:00Z" } });
+    await panel.rerender({ detail: { updatedAt: "2026-09-10T10:01:00Z" } });
     await pending.fail();
-    expect(refreshActivity).not.toHaveBeenCalled();
-    expect(diffRefreshes()).toBe("0");
+    expect(panel.refreshActivity).not.toHaveBeenCalled();
+    expect(panel.diffRefreshes()).toBe("0");
     expect(notify).toHaveBeenCalledWith(expect.objectContaining({ type: "error" }));
-    await render({ detail: { ...props.detail! } });
+    await panel.rerender({ detail: { ...panel.props.detail! } });
     expect(invalidate).toHaveBeenCalledTimes(2);
-    expect(refreshActivity).toHaveBeenCalledOnce();
-    expect(diffRefreshes()).toBe("1");
+    expect(panel.refreshActivity).toHaveBeenCalledOnce();
+    expect(panel.diffRefreshes()).toBe("1");
   });
 
   it("does not reread held metadata when poll invalidation fails", async () => {
-    await render();
+    await using panel = await mountPanel();
     const pending = invalidation();
     await poll();
     await pending.fail();
-    expect(refreshMetadata).not.toHaveBeenCalled();
-    expect(refreshActivity).not.toHaveBeenCalled();
-    expect(diffRefreshes()).toBe("0");
+    expect(panel.refreshMetadata).not.toHaveBeenCalled();
+    expect(panel.refreshActivity).not.toHaveBeenCalled();
+    expect(panel.diffRefreshes()).toBe("0");
   });
 
   it("reports failed manual invalidation without refreshing and allows a successful retry", async () => {
-    await render();
+    await using panel = await mountPanel();
     const failed = invalidation();
     await act(async () => {
-      void container.querySelector("button")!.click();
+      void panel.container.querySelector("button")!.click();
     });
-    expect(container.querySelector("button")!.disabled).toBe(true);
-    expect(refreshDetail).not.toHaveBeenCalled();
+    expect(panel.container.querySelector("button")!.disabled).toBe(true);
+    expect(panel.refreshDetail).not.toHaveBeenCalled();
     await failed.fail();
-    expect(refreshDetail).not.toHaveBeenCalled();
-    expect(diffRefreshes()).toBe("0");
+    expect(panel.refreshDetail).not.toHaveBeenCalled();
+    expect(panel.diffRefreshes()).toBe("0");
     expect(notify).toHaveBeenCalledExactlyOnceWith({
       type: "error",
       title: "The pull request could not be refreshed",
       description: "offline",
     });
-    expect(container.querySelector("button")!.disabled).toBe(false);
+    expect(panel.container.querySelector("button")!.disabled).toBe(false);
 
     const retry = invalidation();
     await act(async () => {
-      void container.querySelector("button")!.click();
+      void panel.container.querySelector("button")!.click();
     });
-    expect(container.querySelector("button")!.disabled).toBe(true);
-    expect(refreshDetail).not.toHaveBeenCalled();
-    expect(diffRefreshes()).toBe("0");
+    expect(panel.container.querySelector("button")!.disabled).toBe(true);
+    expect(panel.refreshDetail).not.toHaveBeenCalled();
+    expect(panel.diffRefreshes()).toBe("0");
     await retry.succeed();
     expect(invalidate).toHaveBeenCalledTimes(2);
-    expect(refreshDetail).toHaveBeenCalledOnce();
-    expect(diffRefreshes()).toBe("1");
+    expect(panel.refreshDetail).toHaveBeenCalledOnce();
+    expect(panel.diffRefreshes()).toBe("1");
     expect(notify).toHaveBeenCalledOnce();
-    expect(container.querySelector("button")!.disabled).toBe(false);
+    expect(panel.container.querySelector("button")!.disabled).toBe(false);
   });
 
   it.each(["success", "failure"])(
     "ignores an older manual %s while a forced refresh is pending",
     async (outcome) => {
-      await render();
+      await using panel = await mountPanel();
       const older = invalidation();
       await act(async () => {
-        void container.querySelector("button")!.click();
+        void panel.container.querySelector("button")!.click();
       });
       const newer = invalidation();
-      await render({ forcedRefreshToken: 1 });
+      await panel.rerender({ forcedRefreshToken: 1 });
       await (outcome === "success" ? older.succeed() : older.fail());
-      expect(container.querySelector("button")!.disabled).toBe(true);
-      expect(refreshDetail).not.toHaveBeenCalled();
+      expect(panel.container.querySelector("button")!.disabled).toBe(true);
+      expect(panel.refreshDetail).not.toHaveBeenCalled();
       expect(notify).not.toHaveBeenCalled();
-      expect(diffRefreshes()).toBe("0");
+      expect(panel.diffRefreshes()).toBe("0");
       await newer.succeed();
-      expect(container.querySelector("button")!.disabled).toBe(false);
-      expect(refreshDetail).toHaveBeenCalledOnce();
-      expect(diffRefreshes()).toBe("1");
+      expect(panel.container.querySelector("button")!.disabled).toBe(false);
+      expect(panel.refreshDetail).toHaveBeenCalledOnce();
+      expect(panel.diffRefreshes()).toBe("1");
     },
   );
 
   it.each(["scope", "unmount"])("ignores a manual refresh after %s changes", async (change) => {
-    await render();
+    await using panel = await mountPanel();
     const pending = invalidation();
     await act(async () => {
-      void container.querySelector("button")!.click();
+      void panel.container.querySelector("button")!.click();
     });
     if (change === "scope") {
-      await render({
-        scopeKey: `${props.scopeKey}:other`,
-        reference: { ...props.reference, number: 8 },
+      await panel.rerender({
+        scopeKey: `${panel.props.scopeKey}:other`,
+        reference: { ...panel.props.reference, number: 8 },
       });
-      expect(container.querySelector("button")!.disabled).toBe(false);
+      expect(panel.container.querySelector("button")!.disabled).toBe(false);
     } else {
-      await act(async () => renderer!.unmount());
-      renderer = null;
+      await panel.unmount();
     }
     await pending.succeed();
-    expect(refreshDetail).not.toHaveBeenCalled();
+    expect(panel.refreshDetail).not.toHaveBeenCalled();
     expect(notify).not.toHaveBeenCalled();
-    if (renderer) expect(diffRefreshes()).toBe("0");
+    if (panel.mounted) expect(panel.diffRefreshes()).toBe("0");
   });
 
   it("awaits full invalidation before a page refresh", async () => {
-    await render();
+    await using panel = await mountPanel();
     const pending = invalidation();
-    await render({ forcedRefreshToken: 1 });
-    expect(refreshDetail).not.toHaveBeenCalled();
-    expect(diffRefreshes()).toBe("0");
-    expect(container.querySelector("button")!.disabled).toBe(true);
+    await panel.rerender({ forcedRefreshToken: 1 });
+    expect(panel.refreshDetail).not.toHaveBeenCalled();
+    expect(panel.diffRefreshes()).toBe("0");
+    expect(panel.container.querySelector("button")!.disabled).toBe(true);
     await pending.succeed();
-    expect(refreshDetail).toHaveBeenCalledOnce();
-    expect(diffRefreshes()).toBe("1");
-    expect(container.querySelector("button")!.disabled).toBe(false);
+    expect(panel.refreshDetail).toHaveBeenCalledOnce();
+    expect(panel.diffRefreshes()).toBe("1");
+    expect(panel.container.querySelector("button")!.disabled).toBe(false);
   });
 });
