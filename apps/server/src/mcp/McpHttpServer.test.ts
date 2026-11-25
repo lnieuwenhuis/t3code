@@ -2147,8 +2147,11 @@ it.effect("lists optional tools to a deferring client only after tool_search loa
         });
       const OptionalToolkit = Toolkit.make(
         tool("delegate_task", "Delegates a task."),
-        tool("preview_open", "Opens a browser preview."),
+        tool("t3_thread_launch", "Launches a thread."),
         tool("schedule_task", "Schedules a task."),
+        tool("html_render", "Renders HTML."),
+        tool("preview_open", "Opens a browser preview."),
+        tool("t3_project_list", "Lists projects."),
       );
       const reads = McpToolAccess.reads(() => Effect.succeed({}));
       const serverLayer = McpHttpServer.layerMcpTransport(
@@ -2157,8 +2160,11 @@ it.effect("lists optional tools to a deferring client only after tool_search loa
             OptionalToolkit,
             McpToolAccess.toLayer(OptionalToolkit, {
               delegate_task: reads,
-              preview_open: reads,
+              t3_thread_launch: reads,
               schedule_task: reads,
+              html_render: reads,
+              preview_open: reads,
+              t3_project_list: reads,
             }),
           ),
           McpHttpServer.layerToolSearch,
@@ -2231,16 +2237,37 @@ it.effect("lists optional tools to a deferring client only after tool_search loa
 
       const deferring = yield* session("deferringToken", true);
       const other = yield* session("otherToken", false);
-      expect(yield* deferring.listed).toEqual(["delegate_task", "tool_search"]);
-      expect(yield* other.listed).toEqual(["delegate_task", "preview_open", "schedule_task"]);
+      const allOptionalTools = [
+        "delegate_task",
+        "html_render",
+        "preview_open",
+        "schedule_task",
+        "t3_project_list",
+        "t3_thread_launch",
+      ];
+      expect(yield* deferring.listed).toEqual([
+        "delegate_task",
+        "html_render",
+        "schedule_task",
+        "t3_thread_launch",
+        "tool_search",
+      ]);
+      expect(yield* other.listed).toEqual(allOptionalTools);
       // Unlisted tools stay callable.
-      expect((yield* deferring.call("schedule_task", {})).structuredContent).toEqual({});
+      expect((yield* deferring.call("t3_project_list", {})).structuredContent).toEqual({});
 
       expect(
         (yield* deferring.call("tool_search", { query: "browser" })).structuredContent,
       ).toEqual({ tools: [{ name: "preview_open", description: "Opens a browser preview." }] });
-      expect(yield* deferring.listed).toEqual(["delegate_task", "preview_open", "tool_search"]);
-      expect(yield* other.listed).toEqual(["delegate_task", "preview_open", "schedule_task"]);
+      expect(yield* deferring.listed).toEqual([
+        "delegate_task",
+        "html_render",
+        "preview_open",
+        "schedule_task",
+        "t3_thread_launch",
+        "tool_search",
+      ]);
+      expect(yield* other.listed).toEqual(allOptionalTools);
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );

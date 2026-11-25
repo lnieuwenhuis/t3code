@@ -49,6 +49,7 @@ const MCP_PROTOCOL_VERSION = "2025-06-18";
 export interface AcpMcpStdioBridgeOptions {
   readonly endpoint: string;
   readonly authorization: string;
+  readonly toolExposure?: string;
   readonly input: NodeJS.ReadableStream;
   readonly output: { write(chunk: string): unknown };
   readonly fetchImplementation?: (url: string, init?: RequestInit) => Promise<Response>;
@@ -247,6 +248,9 @@ export function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): Effect.
                 "content-type": "application/json",
                 accept: "application/json, text/event-stream",
                 authorization: options.authorization,
+                ...(options.toolExposure === undefined
+                  ? {}
+                  : { "t3-tool-exposure": options.toolExposure }),
                 ...(sessionId === null ? {} : { "mcp-session-id": sessionId }),
                 ...(protocolVersion === null ? {} : { "mcp-protocol-version": protocolVersion }),
               },
@@ -374,10 +378,12 @@ export async function runAcpMcpCliFastPath(
     return;
   }
   if (command === "acp-mcp-bridge") {
+    const toolExposure = process.env.T3_ACP_MCP_TOOL_EXPOSURE;
     await Effect.runPromise(
       runAcpMcpStdioBridge({
         endpoint,
         authorization,
+        ...(toolExposure === undefined ? {} : { toolExposure }),
         input: process.stdin,
         output: process.stdout,
       }),
